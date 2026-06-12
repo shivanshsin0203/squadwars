@@ -576,7 +576,7 @@ export class AuctionMatch {
     // If no open lot, plan starts at the current lotIndex.
     const startIdx = this.lotState ? this.lotIndex + 1 : this.lotIndex;
     const planEnd = Math.min(startIdx + 2, this.queue.length);
-    const ctxEnd = Math.min(planEnd + 1, this.queue.length);
+    const ctxEnd = Math.min(planEnd + 2, this.queue.length);
 
     if (startIdx >= this.queue.length) {
       console.log(`[MATCH:llm] id=${this.matchId} no more lots to plan`);

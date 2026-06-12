@@ -551,15 +551,42 @@ function validatePlan(
     const sameCatRemaining = req.remainingByCategory[expected.category];
     const mustBuy = sameCatDeficit > 0 && sameCatDeficit >= sameCatRemaining;
     if (mustBuy) {
-      const mandatoryFloor = Math.max(cap, Math.floor(expected.value_eur * 1.5));
+      const mandatoryFloor = Math.max(cap, Math.floor(expected.value_eur * 2.0));
       if (mandatoryFloor > cap) {
         console.log(
           `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
             `MUST-BUY (${expected.category} deficit=${sameCatDeficit}, remaining=${sameCatRemaining}) — ` +
-            `cap €${cap.toLocaleString("en-US")} → €${mandatoryFloor.toLocaleString("en-US")} (1.5× value_eur)`
+            `cap €${cap.toLocaleString("en-US")} → €${mandatoryFloor.toLocaleString("en-US")} (2.0× value_eur)`
         );
         cap = mandatoryFloor;
         floorNote += " [MUST-BUY]";
+      }
+    }
+
+    // FIX 3 — End-game pressure floor.
+    // When ≤5 lots remain AND AI is still sitting on > €100M unspent AND the player is in an
+    // unfilled XI slot, force the cap to at least (aiBudget / unfilledCount). This kills the
+    // "save for next" hoarding pattern that has plagued every match the AI lost.
+    const ENDGAME_LOTS = 5;
+    const ENDGAME_BUDGET_THRESHOLD = 100_000_000;
+    if (
+      isXiDeficit &&
+      req.lotsRemaining <= ENDGAME_LOTS &&
+      req.aiBudgetLeft > ENDGAME_BUDGET_THRESHOLD &&
+      req.aiSquad.unfilledXiSlots.length > 0
+    ) {
+      const perSlotBudget = Math.floor(
+        req.aiBudgetLeft / req.aiSquad.unfilledXiSlots.length
+      );
+      if (perSlotBudget > cap) {
+        console.log(
+          `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
+            `ENDGAME-FLOOR (lotsRemaining=${req.lotsRemaining} ≤ ${ENDGAME_LOTS}, ` +
+            `aiBudget=€${req.aiBudgetLeft.toLocaleString("en-US")}, unfilled=${req.aiSquad.unfilledXiSlots.length}) — ` +
+            `cap €${cap.toLocaleString("en-US")} → €${perSlotBudget.toLocaleString("en-US")} (budget / unfilled)`
+        );
+        cap = perSlotBudget;
+        floorNote += " [ENDGAME-FLOOR]";
       }
     }
 
