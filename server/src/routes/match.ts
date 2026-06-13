@@ -27,6 +27,9 @@ import {
   DEFAULT_FORMATION,
   FORMATION_NAMES,
   isValidFormation,
+  DEFAULT_DIFFICULTY,
+  DIFFICULTY_NAMES,
+  isValidDifficulty,
 } from "../config.js";
 
 export const matchRoutes = new Hono();
@@ -71,25 +74,42 @@ function isPositiveInt(v: unknown): v is number {
 // ─────────────────────────── POST /api/match ───────────────────────────
 
 matchRoutes.post("/", async (c) => {
-  const body = (await safeJson(c)) as { formation?: unknown } | null;
-  const raw =
+  const body = (await safeJson(c)) as
+    | { formation?: unknown; difficulty?: unknown }
+    | null;
+  const rawF =
     body && typeof body.formation === "string" && body.formation.trim()
       ? body.formation.trim()
       : DEFAULT_FORMATION;
 
-  if (!isValidFormation(raw)) {
+  if (!isValidFormation(rawF)) {
     return c.json(
       {
-        error: `unknown formation "${raw}"`,
+        error: `unknown formation "${rawF}"`,
         allowed: FORMATION_NAMES,
       },
       400
     );
   }
-  const formation = raw;
+  const formation = rawF;
+
+  const rawD =
+    body && typeof body.difficulty === "string" && body.difficulty.trim()
+      ? body.difficulty.trim()
+      : DEFAULT_DIFFICULTY;
+  if (!isValidDifficulty(rawD)) {
+    return c.json(
+      {
+        error: `unknown difficulty "${rawD}"`,
+        allowed: DIFFICULTY_NAMES,
+      },
+      400
+    );
+  }
+  const difficulty = rawD;
 
   const matchId = nanoid(MATCH_ID_LENGTH);
-  const match = new AuctionMatch({ matchId, formation });
+  const match = new AuctionMatch({ matchId, formation, difficulty });
   putMatch(match);
 
   // Block on LLM seed so lot 1 opens with a real cap, not heuristic.
@@ -99,6 +119,7 @@ matchRoutes.post("/", async (c) => {
   return c.json({
     matchId,
     formation,
+    difficulty,
     status: match.status,
     lotsTotal: match.queue.length,
     llmSeeded: match.forwardPlan.size > 0,

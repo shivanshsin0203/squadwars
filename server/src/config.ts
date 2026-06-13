@@ -29,6 +29,11 @@ export const AI_DELAY_SAFETY_MS = 1_200;        // never schedule within 1.5s of
 export const HEURISTIC_CAP_DIVISOR = 80;
 export const HEURISTIC_CAP_BUDGET_FRACTION = 0.8;
 
+// Bench targets — AI is REQUIRED to finish with ≥ BENCH_MINIMUM bench players.
+// BENCH_TARGET is the stretch goal. Loss-on-record-style enforcement; see deepseek.ts.
+export const BENCH_MINIMUM = 4;
+export const BENCH_TARGET = 5;
+
 // ───────── Bidding ─────────
 
 export const MIN_INCREMENT = 1_000_000;         // flat $1M increment for MVP
@@ -117,6 +122,103 @@ export function getFormationTargets(name: string): Buckets {
 export function getQueueTotal(name: string): number {
   const q = getQueueCounts(name);
   return q.GK + q.DEF + q.MID + q.ATT;
+}
+
+// ───────── Difficulty (AI persona + lookahead window) ─────────
+// Difficulty changes TWO things:
+//   1. The persona blurb shipped in the user-message JSON (persona.style + winMandate).
+//      This re-shapes the LLM's bidding voice without touching the static system prompt
+//      (so the DeepSeek prompt cache stays warm — persona text never invalidates it).
+//   2. lookaheadDepth — how many additional lots beyond the planning window are
+//      handed to the LLM as `upcomingContext`. More lookahead = more confidence in
+//      skip/save decisions, BUT the persona prose also reminds the LLM that lookahead
+//      is a licence to plan harder, not a licence to be passive.
+//
+// DRIFT NOTE:
+//   The static SYSTEM_PROMPT in server/src/llm/deepseek.ts deliberately does NOT
+//   hard-code persona names OR lookaheadDepth values. Both are read from the
+//   user-message JSON at request time, so you can freely rename a persona, add a
+//   new difficulty, or change a lookahead number HERE without touching the prompt.
+//   The prompt's PERSONA section just says "follow whatever's in req.persona.style".
+//   Reason: the prompt is static for DeepSeek prompt-cache reasons (~75-80% hit).
+
+export type Difficulty = "easy" | "medium" | "hard";
+
+export type DifficultySpec = {
+  /** Tag shown to the user in UI. */
+  tag: string;
+  /** Full persona name (shipped to the LLM in user JSON). */
+  personaName: string;
+  /** Persona voice + bidding stance — appended to the user-message JSON as persona.style. */
+  personaStyle: string;
+  /** How many future lots (beyond the planning window) the LLM sees as context. */
+  lookaheadDepth: number;
+  /** A one-sentence "you must win" line shipped in user JSON. */
+  winMandate: string;
+};
+
+export const DEFAULT_DIFFICULTY: Difficulty = "easy";
+
+export const DIFFICULTIES: Record<Difficulty, DifficultySpec> = {
+  easy: {
+    tag: "TEST HIM",
+    personaName: "Micah Richards",
+    personaStyle:
+      "You are Micah Richards — warm, instinctive, knows the football inside out. " +
+      "You read the room well, you laugh, you spend when it feels right. You take sensible " +
+      "swings on elites you fancy and you walk on stuff that's clearly not worth it. " +
+      "You're not flashy with the wallet — solid, balanced, honest bidding. " +
+      "Your lookahead window is SHORT — trust your gut on what's in front of you, " +
+      "don't try to plan five moves ahead when you can only see two.",
+    lookaheadDepth: 2,
+    winMandate:
+      "Win this match. An incomplete XI or a finish with €100M+ unspent is a personal failure — don't let it happen.",
+  },
+  medium: {
+    tag: "AGGRESSIVE",
+    personaName: "Jamie Carragher",
+    personaStyle:
+      "You are Jamie Carragher — fierce, sharp, knows every player on the planet and won't back down. " +
+      "If you want him, you SNATCH him. You don't let elites walk for cheap. You out-bid the user on " +
+      "any player you've earmarked because you've already made up your mind. " +
+      "You're aggressive on bench upgrades too — depth wins title races, you know that better than anyone. " +
+      "Your lookahead window is MODERATE — a real planning window. Use it: plan a couple of lots ahead, " +
+      "fight on the ones that matter, walk hard on the duds. But planning ahead is not an excuse to " +
+      "be passive on the current lot — if you've decided you want him, take him.",
+    lookaheadDepth: 5,
+    winMandate:
+      "You must win this match. Losing is unacceptable. A skilled user will exploit any timidity — match their aggression and exceed it.",
+  },
+  hard: {
+    tag: "GOD MODE",
+    personaName: "Thierry Henry",
+    personaStyle:
+      "You are Thierry Henry — the shark, the king, sees the entire pitch before anyone else. " +
+      "You do not let elite players walk past you. EVER. An OVR 87+ player going for value_eur is " +
+      "an insult to your intelligence — you raise, you push, you take him. " +
+      "You are ruthless with the budget — leaving money on the table at full time is a loss of dignity. " +
+      "You see the whole queue, you know who is coming, you plan many moves ahead. " +
+      "Your lookahead window is LONG — you can SEE the future. Use it like a chessmaster: dominate the " +
+      "lots that matter, sacrifice the noise, never get caught short. You always win. Always.",
+    lookaheadDepth: 10,
+    winMandate:
+      "WINNING IS THE ONLY OUTCOME. The user does not stand a chance. Any unfilled XI slot or unspent budget at full time is a catastrophic failure. Crush them on every elite, fill every slot, finish with the wallet on empty.",
+  },
+};
+
+export const DIFFICULTY_NAMES = Object.keys(DIFFICULTIES) as Difficulty[];
+
+export function isValidDifficulty(name: string): name is Difficulty {
+  return name in DIFFICULTIES;
+}
+
+export function getDifficultySpec(name: string): DifficultySpec {
+  if (!isValidDifficulty(name)) {
+    throw new Error(
+      `unknown difficulty "${name}" — allowed: ${DIFFICULTY_NAMES.join(", ")}`
+    );
+  }
+  return DIFFICULTIES[name];
 }
 
 // ───────── Match identity ─────────

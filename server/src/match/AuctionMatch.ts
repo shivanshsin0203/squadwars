@@ -29,12 +29,17 @@ import {
   AI_DELAY_MAX_MS,
   AI_DELAY_MIN_MS,
   AI_DELAY_SAFETY_MS,
+  BENCH_MINIMUM,
+  BENCH_TARGET,
+  DEFAULT_DIFFICULTY,
+  getDifficultySpec,
   LOT_DURATION_MS,
   LOT_END_TOLERANCE_MS,
   MIN_INCREMENT,
   getFormationTargets,
   getQueueTotal,
   STARTING_BUDGET,
+  type Difficulty,
 } from "../config.js";
 import { buildQueue } from "./playerPool.js";
 import { computeAiBidAmount, computeHeuristicCap } from "./ai.js";
@@ -48,6 +53,7 @@ import {
 export type AuctionMatchCtor = {
   matchId: string;
   formation: string;
+  difficulty?: Difficulty;
 };
 
 export type BidResult =
@@ -66,6 +72,7 @@ export class AuctionMatch {
   // ─────── identity ───────
   readonly matchId: string;
   readonly formation: string;
+  readonly difficulty: Difficulty;
   readonly createdAt: number;
 
   // ─────── top-level lifecycle ───────
@@ -102,6 +109,7 @@ export class AuctionMatch {
   constructor(opts: AuctionMatchCtor) {
     this.matchId = opts.matchId;
     this.formation = opts.formation;
+    this.difficulty = opts.difficulty ?? DEFAULT_DIFFICULTY;
     this.createdAt = Date.now();
     this.queue = buildQueue(opts.formation);
 
@@ -112,8 +120,11 @@ export class AuctionMatch {
       );
     }
 
+    const diffSpec = getDifficultySpec(this.difficulty);
     console.log(
       `[MATCH:create] id=${this.matchId} formation=${this.formation} ` +
+        `difficulty=${this.difficulty} persona="${diffSpec.personaName}" ` +
+        `lookahead=${diffSpec.lookaheadDepth} ` +
         `status=${this.status} queueLen=${this.queue.length} ` +
         `userBudget=${this.userBudget.toLocaleString()} ` +
         `aiBudget=${this.aiBudget.toLocaleString()}`
@@ -399,6 +410,7 @@ export class AuctionMatch {
     return {
       matchId: this.matchId,
       formation: this.formation,
+      difficulty: this.difficulty,
       status: this.status,
       user: {
         budget: this.userBudget,
@@ -577,7 +589,10 @@ export class AuctionMatch {
     // If no open lot, plan starts at the current lotIndex.
     const startIdx = this.lotState ? this.lotIndex + 1 : this.lotIndex;
     const planEnd = Math.min(startIdx + 2, this.queue.length);
-    const ctxEnd = Math.min(planEnd + 2, this.queue.length);
+    // Difficulty drives how many lookahead lots the LLM gets to plan against.
+    // Micah = 2, Jamie = 5, Henry = 10. Sliced to queue length.
+    const diffSpec = getDifficultySpec(this.difficulty);
+    const ctxEnd = Math.min(planEnd + diffSpec.lookaheadDepth, this.queue.length);
 
     if (startIdx >= this.queue.length) {
       console.log(`[MATCH:llm] id=${this.matchId} no more lots to plan`);
@@ -638,12 +653,16 @@ export class AuctionMatch {
       Math.max(0, aiCounts.DEF - targets.DEF) +
       Math.max(0, aiCounts.MID - targets.MID) +
       Math.max(0, aiCounts.ATT - targets.ATT);
-    const benchMinimum = 4; // MUST end with at least 4 bench players
-    const benchTarget = 5; // aim for 5
+    const benchMinimum = BENCH_MINIMUM;
+    const benchTarget = BENCH_TARGET;
     const benchNeeded = Math.max(0, benchTarget - benchCount);
     const benchMandatoryGap = Math.max(0, benchMinimum - benchCount);
 
-    // Remaining queue scarcity per category (after the planning window).
+    // Remaining queue scarcity per category — INCLUDES the lots in this planning
+    // window (startIdx onward), not just the lookahead. The MUST-BUY validator
+    // relies on this inclusive semantics: when sameCatDeficit >= sameCatRemaining
+    // the current lot is the LAST chance to fill that position. Do NOT change to
+    // start at planEnd without also updating validatePlan() and the system prompt.
     const scarcity = { GK: 0, DEF: 0, MID: 0, ATT: 0 };
     for (let i = startIdx; i < this.queue.length; i++) {
       scarcity[this.queue[i].category]++;
@@ -722,6 +741,12 @@ export class AuctionMatch {
         })),
       },
       opponentSkill: "skilled",
+      persona: {
+        name: diffSpec.personaName,
+        style: diffSpec.personaStyle,
+      },
+      lookaheadDepth: upcomingContext.length,
+      winMandate: diffSpec.winMandate,
     };
 
     this.llmInFlight = true;
@@ -779,6 +804,7 @@ export class AuctionMatch {
     return {
       matchId: this.matchId,
       formation: this.formation,
+      difficulty: this.difficulty,
       status: this.status,
       createdAt: this.createdAt,
       lotIndex: this.lotIndex,

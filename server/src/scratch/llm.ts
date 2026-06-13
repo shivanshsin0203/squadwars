@@ -3,6 +3,7 @@
  * parsed cap plan.
  *
  * Run:  npx tsx --env-file=.env src/scratch/llm.ts
+ *       SW_FORMATION=4-4-2 SW_DIFFICULTY=hard npx tsx --env-file=.env src/scratch/llm.ts
  *
  * Expects:
  *   - AI_KEY in .env
@@ -15,13 +16,30 @@
  *   - Caps are returned in correct order, parseable, integer dollars
  *   - Player IDs match what we asked
  *   - Clamping triggers if LLM returns > 80% budget
- *   - The reason field is short and useful
+ *
+ * Why this script does NOT hand-build the LlmCapRequest:
+ *   Earlier versions of this scratch hand-typed targets / xiStatus /
+ *   unfilledXiSlots / remainingByCategory / spendPressure / persona — all
+ *   of which the server derives from FORMATIONS + DIFFICULTIES + match
+ *   state. The hand-typed copies drifted (e.g. remainingByCategory was
+ *   stuck at the pre-formation-system numbers), and the persona block
+ *   was a frozen stub. So we now drive the real path: create a match,
+ *   call seedForwardPlan() (which builds the proper request via
+ *   AuctionMatch.runCapPlanning and hits DeepSeek), then inspect the
+ *   resulting forwardPlan + usage counters.
  */
 
 import { nanoid } from "nanoid";
 import { AuctionMatch } from "../match/AuctionMatch.js";
-import { MATCH_ID_LENGTH } from "../config.js";
-import { isLlmConfigured, planCaps } from "../llm/deepseek.js";
+import {
+  DEFAULT_DIFFICULTY,
+  DEFAULT_FORMATION,
+  isValidDifficulty,
+  isValidFormation,
+  MATCH_ID_LENGTH,
+  type Difficulty,
+} from "../config.js";
+import { isLlmConfigured } from "../llm/deepseek.js";
 
 async function main() {
   console.log("LLM configured:", isLlmConfigured());
@@ -30,105 +48,76 @@ async function main() {
     process.exit(2);
   }
 
-  // Build a realistic state by creating a match (gives us a queue + budgets).
+  // Allow override via env so this script covers all 6×3 configurations
+  // without further edits. Defaults match the production defaults.
+  const formationArg = process.env.SW_FORMATION?.trim() || DEFAULT_FORMATION;
+  const difficultyArg = process.env.SW_DIFFICULTY?.trim() || DEFAULT_DIFFICULTY;
+
+  if (!isValidFormation(formationArg)) {
+    console.error(`Bad SW_FORMATION="${formationArg}".`);
+    process.exit(2);
+  }
+  if (!isValidDifficulty(difficultyArg)) {
+    console.error(`Bad SW_DIFFICULTY="${difficultyArg}".`);
+    process.exit(2);
+  }
+  const difficulty: Difficulty = difficultyArg;
+
   const match = new AuctionMatch({
     matchId: nanoid(MATCH_ID_LENGTH),
-    formation: "4-3-3",
+    formation: formationArg,
+    difficulty,
   });
 
-  // Plan for the actual first 2 lots of this match.
-  const toPlan = [
-    match.queue[0],
-    match.queue[1],
-  ].map((p, i) => ({
-    lotIndex: i,
-    id: p.id,
-    name: p.name,
-    primary_position: p.primary_position,
-    category: p.category,
-    overall: p.overall,
-    club: p.club,
-    country: p.country,
-    value_eur: p.value_eur,
-  }));
-  const upcomingContext = [match.queue[2]].map((p) => ({
-    lotIndex: 2,
-    id: p.id,
-    name: p.name,
-    primary_position: p.primary_position,
-    category: p.category,
-    overall: p.overall,
-    club: p.club,
-    country: p.country,
-    value_eur: p.value_eur,
-  }));
+  console.log("\n── Match config ──");
+  console.log(`  matchId      : ${match.matchId}`);
+  console.log(`  formation    : ${match.formation}`);
+  console.log(`  difficulty   : ${match.difficulty}`);
+  console.log(`  queueLen     : ${match.queue.length}`);
+  console.log(`  aiBudget     : €${match.aiBudget.toLocaleString("en-US")}`);
 
-  console.log("\n── Players being capped ──");
-  for (const p of toPlan) {
-    console.log(`  ${p.category}/${p.primary_position} ${p.name} OVR ${p.overall} (${p.club}, ${p.country}) value=$${p.value_eur.toLocaleString("en-US")}`);
-  }
-  console.log("── Lookahead context ──");
-  for (const p of upcomingContext) {
-    console.log(`  ${p.category}/${p.primary_position} ${p.name} OVR ${p.overall}`);
-  }
-
-  console.log("\n── Calling DeepSeek… ──");
-  const t0 = Date.now();
-  const { caps } = await planCaps({
-    matchId: match.matchId,
-    formation: match.formation,
-    aiBudgetLeft: match.aiBudget,
-    userBudgetLeft: match.userBudget,
-    lotIndex: 0,
-    lotsTotal: match.queue.length,
-    lotsRemaining: match.queue.length,
-    toPlan,
-    upcomingContext,
-    aiSquad: {
-      counts: { GK: 0, DEF: 0, MID: 0, ATT: 0 },
-      targets: { GK: 1, DEF: 4, MID: 3, ATT: 3 },
-      xiStatus: {
-        GK: "GK: 0/1 — STILL NEED 1 STARTER",
-        DEF: "DEF: 0/4 — STILL NEED 4 STARTERS",
-        MID: "MID: 0/3 — STILL NEED 3 STARTERS",
-        ATT: "ATT: 0/3 — STILL NEED 3 STARTERS",
-      },
-      unfilledXiSlots: ["GK", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "ATT", "ATT", "ATT"],
-      xiComplete: false,
-      benchCount: 0,
-      benchMinimum: 4,
-      benchTarget: 5,
-      benchNeeded: 5,
-      benchMandatoryGap: 4,
-      bought: [],
-    },
-    remainingByCategory: { GK: 3, DEF: 10, MID: 10, ATT: 10 },
-    spendPressure: {
-      fraction: 1.0,
-      expectedBudgetNow: 1_000_000_000,
-      hoardingExcess: 0,
-      verdict: "ON_PACE",
-    },
-    userActivity: {
-      boughtCount: 0,
-      totalSpent: 0,
-      averagePrice: 0,
-      highestSinglePrice: 0,
-      recentWins: [],
-    },
-    opponentSkill: "skilled",
-  });
-  console.log(`── Round-trip ${Date.now() - t0}ms ──\n`);
-
-  console.log("Returned caps Map:", Object.fromEntries(caps));
-  console.log("\nVerification:");
-  for (const p of toPlan) {
-    const cap = caps.get(p.id);
-    const ok = cap !== undefined;
+  console.log("\n── First 5 queue players (what the LLM will see in toPlan + lookahead) ──");
+  for (let i = 0; i < Math.min(5, match.queue.length); i++) {
+    const p = match.queue[i];
     console.log(
-      `  ${ok ? "✓" : "✗"} ${p.name} (id=${p.id}) cap=$${cap?.toLocaleString("en-US") ?? "MISSING"}`
+      `  ${String(i).padStart(2)}. ${p.category}/${p.primary_position.padEnd(3)} ` +
+        `${p.name.padEnd(24)} OVR ${p.overall} value=€${p.value_eur.toLocaleString("en-US")}`
     );
   }
+
+  console.log("\n── Calling DeepSeek via match.seedForwardPlan() ──");
+  const t0 = Date.now();
+  await match.seedForwardPlan();
+  console.log(`── Round-trip ${Date.now() - t0}ms ──\n`);
+
+  console.log("forwardPlan size:", match.forwardPlan.size);
+  console.log("Plan entries:");
+  for (const [playerId, cap] of match.forwardPlan) {
+    const player = match.queue.find((p) => p.id === playerId);
+    const name = player ? `${player.name} (${player.category} OVR ${player.overall})` : `id=${playerId}`;
+    console.log(`  cap=€${cap.toLocaleString("en-US").padStart(13)}  ${name}`);
+  }
+
+  console.log("\nLLM usage (this run):");
+  console.log({
+    callCount: match.llmCallCount,
+    callsFailed: match.llmCallsFailed,
+    promptTokens: match.llmPromptTokens,
+    cachedPromptTokens: match.llmCachedPromptTokens,
+    completionTokens: match.llmCompletionTokens,
+    totalCostUsd: Number(match.llmTotalCostUsd.toFixed(6)),
+    latencyMs: match.llmTotalLatencyMs,
+  });
+
+  if (match.llmCallsFailed > 0) {
+    console.error("\nFAIL: at least one LLM call failed (heuristic fallback covered).");
+    process.exit(1);
+  }
+  if (match.forwardPlan.size === 0) {
+    console.error("\nFAIL: forwardPlan is empty — DeepSeek returned no valid entries.");
+    process.exit(1);
+  }
+  console.log("\nOK: cap plan seeded for first 2 lots of this match.");
 }
 
 main().catch((err) => {

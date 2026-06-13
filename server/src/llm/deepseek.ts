@@ -41,7 +41,11 @@ if (!apiKey) {
   console.log(`[LLM] DeepSeek configured (model=${MODEL})`);
 }
 
-const LLM_TIMEOUT_MS = 12_000;
+// Bumped from 12_000 after observing a cluster of DeepSeek tail-latency
+// timeouts during a single match (6 failed of 34 calls). 20s leaves real
+// margin for the API's occasional slow queue without making the seed call
+// feel broken to the user. The bid loop never blocks on these calls anyway.
+const LLM_TIMEOUT_MS = 20_000;
 
 // ─────────────────────────── public types ───────────────────────────
 
@@ -104,7 +108,12 @@ export type LlmCapRequest = {
     }>;
   };
 
-  /** Remaining lots (after this batch) grouped by category — tells LLM how scarce each slot is. */
+  /**
+   * Remaining lots from this planning batch onward (INCLUSIVE of toPlan and
+   * upcomingContext), grouped by category. Inclusive on purpose — the MUST-BUY
+   * floor uses `sameCatDeficit >= remainingByCategory[cat]` to detect
+   * "this lot is the last chance for this position".
+   */
   remainingByCategory: { GK: number; DEF: number; MID: number; ATT: number };
 
   /**
@@ -132,6 +141,27 @@ export type LlmCapRequest = {
 
   /** Heads-up about who you're playing against. Adjust aggression accordingly. */
   opponentSkill: "casual" | "skilled" | "expert";
+
+  /**
+   * Difficulty-driven persona. Drives voice + aggression. Kept in user message
+   * (NOT system prompt) so the static prompt cache survives across all 3 personas.
+   */
+  persona: {
+    /** "Micah Richards" | "Jamie Carragher" | "Thierry Henry" */
+    name: string;
+    /** Behavioural blurb — read it and adopt the voice. */
+    style: string;
+  };
+
+  /**
+   * How many lots of future context you can see in upcomingContext[].
+   * The array's length IS this number — it's not a soft hint, it's literal vision.
+   * Larger = plan harder, not be more passive.
+   */
+  lookaheadDepth: number;
+
+  /** Non-negotiable win directive — read this every call. */
+  winMandate: string;
 };
 
 // ─────────────────────────── system prompt ───────────────────────────
@@ -177,6 +207,15 @@ Schema:
 OPPONENT NOTE
 - opponentSkill tells you the calibre of the user. "skilled" or "expert" = a football-literate opponent who knows player ratings, knows the market, will outbid you on real elites, and will NOT drop out cheap. Don't expect mistakes from them; compete on value.
 - Against a skilled opponent the "strategic over-bid to drain budget" tactic is risky — they may not flinch. Use it only when YOU could realistically use the player as backup too.
+
+PERSONA, LOOKAHEAD & WIN MANDATE — READ EVERY CALL
+- The user JSON carries THREE difficulty-driven fields you MUST honor:
+    1. persona.name + persona.style — the football personality you are this match. Adopt its voice and bidding stance. The style string is authoritative; do not invent contradictory traits.
+    2. lookaheadDepth — an integer. It tells you how many lots of future context are in upcomingContext[]. The array's length EQUALS this number; it is real vision, not a hint.
+    3. winMandate — a sentence reminding you that winning this match is non-negotiable. Re-read it before every plan.
+- LOOKAHEAD IS PLANNING, NOT PASSIVITY. The larger lookaheadDepth is, the more confidence you can place in your skip/buy decisions — you can see who is coming. BUT a long lookahead is NEVER a licence to wait. A long lookahead means: dominate the lots that matter, walk only on lots you have a CONFIRMED better same-position option for, and never let an elite within your lookahead window walk on someone else's bid you could have outbid.
+- The persona.style line wins ties against the generic guidance below. If the style says "never let OVR 87+ walk for value_eur" and rule 10 below says "skip is a real choice", the style overrides — buy him.
+- Win mandate is absolute. An incomplete XI loses. Hoarding >€100M at full time loses. Match-end target ≤ €5M unspent applies to EVERY persona — the aggressive ones are just more vicious about enforcing it on themselves.
 
 CORE OBJECTIVE — MUST READ
 Build the strongest possible squad, in this STRICT PRIORITY ORDER:
@@ -278,6 +317,20 @@ STRATEGIC PRINCIPLES (apply all, weighted by situation)
    - Server enforcement: TERMINAL-DUMP fires at ≤ 3 lots remaining with hoardingExcess > €100M and an OVR ≥ 80 player on offer — floor = 0.8 × (budget / lotsRemaining). Don't let it fire. Lodge the bid yourself.
    - Past failure: match #10 ended with AI sitting on €411M unspent (41% of starting wallet, all-time high) because LLM treated XI completion as "stop". 7 bench players, all sub-€30M, while OVR 85 H. Son and OVR 89 Pedri went to the user uncontested.
 
+3f. XI-UPGRADE PATTERN — elite (OVR ≥ 85) buys after XI completion are UPGRADES, not "bench skips".
+   - WHEN THIS RULE APPLIES: aiSquad.xiComplete == TRUE AND the player in toPlan is OVR ≥ 85.
+   - DO NOT short-circuit reasoning with "XI is complete → this is bench → skip". That is the #1 OVR-loss bug in this codebase. An OVR 87 ATT showing up after XI-complete does not become "OVR 87 bench" — it becomes a starter-replacement candidate.
+   - DECISION PROCEDURE — execute these steps explicitly in your reason field:
+       1. From aiSquad.bought, filter to the same category as the upcoming player.
+       2. Find the LOWEST-OVR entry in that filtered list — call it the "weakest XI starter at this position" (since the bench/XI split is determined at match end by OVR ranking, the lowest-OVR same-position player IS effectively the weakest current XI starter).
+       3. Compare upcoming.overall vs weakest.overall.
+   - IF upcoming.overall > weakest.overall: this is an XI UPGRADE, not a bench buy. The upcoming player will REPLACE the weakest starter in the final XI; the displaced player slides down to bench. Cap as if filling an XI-deficit slot: 1.3× to 1.6× value_eur, EVEN HIGHER if OVR ≥ 88. You may exceed value_eur by €40–80M on a clear upgrade. NEVER cap < value_eur + €5M. NEVER set cap=0 with a "bench complete" or "ATT complete" rationalization — that rationalization is BANNED for OVR ≥ 85 players when xiComplete is true.
+   - IF upcoming.overall == weakest.overall: still a sensible bench buy at chemistry/depth value (1.0–1.2× value_eur). Skip only if a strictly better same-position player is in lookahead.
+   - IF upcoming.overall < weakest.overall: standard bench treatment — modest cap or skip.
+   - WORKED EXAMPLE — Kvaratskhelia failure (real loss): AI had ATT XI = Ayoze (83) + Castellanos (80). xiComplete = true, so the LLM said "ATT complete, skip" with cap=0 on Kvaratskhelia (OVR 87). Wrong. Correct procedure: weakest ATT = Castellanos (80). Kvaratskhelia (87) > 80 → +7 OVR upgrade. Cap should have been ≥ €145M (value €109M × 1.3). User took him for €155M, the +7 OVR gap decided the match.
+   - WORKED EXAMPLE — bench-true case: AI had MID XI = Salah (91) + Kanté (85) + Sancet (84) + Rabiot (83). Brandt (OVR 83) appears. weakest MID = Rabiot (83). Brandt (83) == 83 → equal, no upgrade. Treat as standard bench at 1.0–1.2× value_eur — buy if chemistry fit, skip if better depth is upcoming.
+   - HARD RULE: a cap=0 entry on an OVR ≥ 85 player while xiComplete = true REQUIRES that the reason field explicitly state which same-category XI starter has OVR ≥ the upcoming player's OVR. If you can't name that starter, you must NOT skip — you must bid.
+
 4. VALUE BASELINE — but NEVER anchor only on value_eur.
    - value_eur is the OPENING PRICE for the lot. You can't win below it.
    - value_eur is a FLAWED proxy for true worth (aging legends like Messi have a tiny value_eur but are still elite — a skilled user will pay €50M+ for Messi even though his value_eur is €22M). Weight OVR heavily, NOT just value_eur.
@@ -375,8 +428,9 @@ export async function planCaps(
     .map((p) => `${p.name}(${p.category}/${p.overall})`)
     .join(", ");
   console.log(
-    `[LLM:request] id=${req.matchId} model=${MODEL} planning ${req.toPlan.length} ` +
-      `player(s): ${namesList} (with ${req.upcomingContext.length} lookahead)`
+    `[LLM:request] id=${req.matchId} model=${MODEL} persona="${req.persona.name}" ` +
+      `lookahead=${req.lookaheadDepth} planning ${req.toPlan.length} ` +
+      `player(s): ${namesList}`
   );
 
   const t0 = Date.now();

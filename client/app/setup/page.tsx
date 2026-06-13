@@ -10,10 +10,53 @@ const BACKEND_URL =
 type CreateMatchResp = {
   matchId: string;
   formation: string;
+  difficulty?: string;
   status: string;
   lotsTotal: number;
   llmSeeded?: boolean;
 };
+
+// ─────────────────────────── difficulty data (mirrors server DIFFICULTIES) ───────────────────────────
+
+type DifficultyName = "easy" | "medium" | "hard";
+
+type DifficultyCard = {
+  name: DifficultyName;
+  /** Pundit identity (always suffixed " AI" in display). */
+  pundit: string;
+  /** Short tactical tag. */
+  tag: string;
+  /** One-line voice — what to expect at the floor. */
+  blurb: string;
+  /** Public asset path (under /public). */
+  photo: string;
+};
+
+const DIFFICULTIES: DifficultyCard[] = [
+  {
+    name: "easy",
+    pundit: "Micah Richards AI",
+    tag: "TEST HIM",
+    blurb: "warm, instinctive, plays the room. balanced bidder — honest and fair on the floor.",
+    photo: "/easy.webp",
+  },
+  {
+    name: "medium",
+    pundit: "Jamie Carragher AI",
+    tag: "AGGRESSIVE",
+    blurb: "fierce, opinionated. if he wants him, he SNATCHES him. won't back down on his picks.",
+    photo: "/medium.jpg",
+  },
+  {
+    name: "hard",
+    pundit: "Thierry Henry AI",
+    tag: "GOD MODE",
+    blurb: "the shark. never lets an elite walk. ruthless with the wallet. always wins.",
+    photo: "/hard.jpg",
+  },
+];
+
+const DEFAULT_DIFFICULTY: DifficultyName = "easy";
 
 // ─────────────────────────── formation data (mirrors server FORMATIONS) ───────────────────────────
 
@@ -634,20 +677,210 @@ const tokens = `
     line-height: 1;
   }
 
-  /* commit row */
-  .sw-commit-card {
+  /* difficulty card row */
+  .sw-diff-card {
     flex: 0 0 auto;
     padding: 12px 14px;
   }
-  .sw-commit-helper {
+  .sw-diff-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 8px; gap: 12px;
+  }
+  .sw-diff-headline {
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.02em;
+  }
+  .sw-diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 7px;
+  }
+  .sw-diff-tile {
+    position: relative;
+    background: var(--surface-2);
+    border: 1px dashed var(--hairline-strong);
+    border-radius: var(--r-md);
+    padding: 8px 8px 10px;
+    display: flex; flex-direction: column; gap: 5px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+    color: inherit;
+    overflow: hidden;
+  }
+  .sw-diff-tile:hover {
+    border-style: solid;
+    border-color: var(--chalk-soft);
+    background: #161F2C;
+  }
+  .sw-diff-tile.is-selected {
+    /* pure sharp chalk — no warm cream wash; brighter than tile-default */
+    background: #FFFFFF;
+    border: 1px solid #FFFFFF;
+    color: var(--ink);
+    box-shadow:
+      0 0 0 1.5px var(--ink),
+      0 0 0 3px var(--chalk),
+      0 8px 22px rgba(242, 237, 224, 0.22);
+  }
+  .sw-diff-tile.is-selected .sw-diff-pundit { color: var(--ink); }
+  .sw-diff-tile.is-selected .sw-diff-tag    { color: var(--whistle); }
+  .sw-diff-tile.is-selected .sw-diff-blurb  { color: rgba(11, 16, 24, 0.78); }
+  .sw-diff-portrait {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: var(--r-sm);
+    background: var(--surface-3);
+    border: 1px solid var(--hairline);
+  }
+  .sw-diff-portrait img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    filter: grayscale(0.10) contrast(1.05);
+    transition: filter 0.18s ease;
+  }
+  .sw-diff-tile.is-selected .sw-diff-portrait {
+    border-color: rgba(11, 16, 24, 0.55);
+  }
+  .sw-diff-tile.is-selected .sw-diff-portrait img {
+    filter: brightness(1.05) contrast(1.10) saturate(1.05);
+  }
+  .sw-diff-portrait::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, transparent 55%, rgba(11,16,24,0.55) 100%);
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+  }
+  /* no dark wash on selected — let the portrait stay crisp */
+  .sw-diff-tile.is-selected .sw-diff-portrait::after { opacity: 0; }
+  .sw-diff-tag {
+    font-family: var(--font-display);
+    font-size: 9px; font-weight: 800;
+    letter-spacing: 0.22em;
+    color: var(--floodlight);
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .sw-diff-pundit {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+  }
+  .sw-diff-blurb {
+    font-family: var(--font-body);
+    font-size: 10.5px;
+    color: var(--muted);
+    line-height: 1.35;
+    /* clip to 2 lines without imposing a hard min-height so layout stays tight */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* bottom bar — pinned commit row */
+  .sw-bottom-bar {
+    flex: 0 0 auto;
+    margin-top: 10px;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    padding: 11px 14px;
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 16px;
+  }
+  .sw-bottom-summary {
+    display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  }
+  .sw-bottom-line-1 {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-family: var(--font-display);
+    font-size: 13px; font-weight: 800;
+    letter-spacing: 0.10em;
+    color: var(--chalk);
+    text-transform: uppercase;
+    line-height: 1.1;
+    flex-wrap: wrap;
+  }
+  .sw-bottom-line-1 .sep {
+    color: var(--dim);
+    padding: 0 8px;
+    font-weight: 500;
+  }
+  .sw-bottom-line-1 .accent { color: var(--floodlight); }
+
+  /* meta chunk on the right of line-1 — visually distinct so it doesn't
+     blur into the formation phrase */
+  .sw-bottom-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--chalk-dim);
+    display: inline-block;
+    flex: 0 0 auto;
+  }
+  .sw-bottom-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+  .sw-bottom-meta .opp-eyebrow {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 9px;
+    letter-spacing: 0.30em;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+  .sw-bottom-meta .opp-tag {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    color: var(--whistle);
+    text-transform: uppercase;
+    background: var(--whistle-soft);
+    border: 1px solid rgba(230, 57, 70, 0.30);
+    border-radius: var(--r-sm);
+    padding: 3px 7px 2px;
+    line-height: 1;
+  }
+  .sw-bottom-meta .opp-pundit {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text);
+    text-transform: none;
+  }
+  .sw-bottom-line-2 {
     font-family: var(--font-body);
     font-size: 11px;
-    color: var(--dim);
-    margin: 7px 2px 0;
-    line-height: 1.4;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+  .sw-bottom-cta {
+    min-width: 240px;
+  }
+  .sw-bottom-cta .sw-btn-bid {
+    width: 100%;
+    padding: 14px 22px;
+    font-size: 14px;
   }
   .sw-commit-err {
-    margin-top: 7px;
+    grid-column: 1 / -1;
+    margin-top: 6px;
     font-family: var(--font-body);
     font-size: 12px;
     color: var(--whistle);
@@ -819,11 +1052,39 @@ function QueueCell({ cat, count }: { cat: Category; count: number }) {
   );
 }
 
+// ─────────────────────────── difficulty tile ───────────────────────────
+
+function DifficultyTile({
+  diff, selected, onSelect,
+}: {
+  diff: DifficultyCard; selected: boolean; onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`sw-diff-tile${selected ? " is-selected" : ""}`}
+      aria-pressed={selected}
+      aria-label={`${diff.tag} — ${diff.pundit} AI`}
+    >
+      <div className="sw-diff-portrait">
+        {/* plain <img>: assets live under /public so the relative path resolves at root */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={diff.photo} alt={`${diff.pundit} portrait`} />
+      </div>
+      <div className="sw-diff-tag">{diff.tag}</div>
+      <div className="sw-diff-pundit">{diff.pundit}</div>
+      <div className="sw-diff-blurb">{diff.blurb}</div>
+    </button>
+  );
+}
+
 // ─────────────────────────── page ───────────────────────────
 
 export default function SetupPage() {
   const router = useRouter();
   const [selected, setSelected] = useState<string>(DEFAULT_FORMATION);
+  const [difficulty, setDifficulty] = useState<DifficultyName>(DEFAULT_DIFFICULTY);
   const [health, setHealth] = useState<"loading" | "ok" | "bad">("loading");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -836,6 +1097,10 @@ export default function SetupPage() {
   const formation = useMemo(
     () => FORMATIONS.find((f) => f.name === selected) ?? FORMATIONS[0],
     [selected]
+  );
+  const diffCard = useMemo(
+    () => DIFFICULTIES.find((d) => d.name === difficulty) ?? DIFFICULTIES[0],
+    [difficulty]
   );
 
   useEffect(() => {
@@ -851,13 +1116,15 @@ export default function SetupPage() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    console.log(`[CLIENT:createMatch] requesting POST /api/match formation=${selected}`);
+    console.log(
+      `[CLIENT:createMatch] requesting POST /api/match formation=${selected} difficulty=${difficulty}`
+    );
     const t0 = performance.now();
     try {
       const res = await fetch(`${BACKEND_URL}/api/match`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ formation: selected }),
+        body: JSON.stringify({ formation: selected, difficulty }),
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -865,7 +1132,10 @@ export default function SetupPage() {
       }
       const data = (await res.json()) as CreateMatchResp;
       const ms = Math.round(performance.now() - t0);
-      console.log(`[CLIENT:createMatch] ${ms}ms → matchId=${data.matchId} formation=${data.formation} llmSeeded=${data.llmSeeded}`);
+      console.log(
+        `[CLIENT:createMatch] ${ms}ms → matchId=${data.matchId} formation=${data.formation} ` +
+          `difficulty=${data.difficulty ?? "?"} llmSeeded=${data.llmSeeded}`
+      );
       router.push(`/auctionroom/${encodeURIComponent(data.matchId)}`);
     } catch (e) {
       console.error("[CLIENT:createMatch] FAILED", e);
@@ -1005,26 +1275,64 @@ export default function SetupPage() {
               </div>
             </div>
 
-            {/* commit card */}
-            <div className="sw-card sw-commit-card">
+            {/* difficulty card — replaces the old commit card; take-to-floor lives in the bottom bar */}
+            <div className="sw-card sw-diff-card">
               <span className="sw-tick-tl" /><span className="sw-tick-tr" />
               <span className="sw-tick-bl" /><span className="sw-tick-br" />
-              <button
-                type="button"
-                className="sw-btn-bid"
-                onClick={takeToTheFloor}
-                disabled={busy}
-              >
-                {busy ? "PREPARING THE FLOOR…" : "▶ TAKE TO THE FLOOR"}
-              </button>
-              <p className="sw-commit-helper">
-                {busy
-                  ? "the house is seeding the AI cap plan via DeepSeek — usually 1–3 seconds."
-                  : `lot 1 opens the moment you take the floor. €1B treasury · 20s on the block per lot.`}
-              </p>
-              {error && <div className="sw-commit-err">{error}</div>}
+              <div className="sw-corner-mark"></div>
+              <div className="sw-diff-head">
+                <span className="sw-eyebrow">PICK YOUR AI PUNDIT AS OPPONENT</span>
+                <span className="sw-diff-headline sw-mono">
+                  {diffCard.pundit.toUpperCase()}
+                </span>
+              </div>
+              <div className="sw-diff-grid">
+                {DIFFICULTIES.map((d) => (
+                  <DifficultyTile
+                    key={d.name}
+                    diff={d}
+                    selected={d.name === difficulty}
+                    onSelect={() => setDifficulty(d.name)}
+                  />
+                ))}
+              </div>
             </div>
           </div>
+        </div>
+
+        {/* bottom bar — pinned take-to-floor strip */}
+        <div className="sw-bottom-bar">
+          <span className="sw-tick-tl" /><span className="sw-tick-tr" />
+          <span className="sw-tick-bl" /><span className="sw-tick-br" />
+          <div className="sw-bottom-summary">
+            <div className="sw-bottom-line-1">
+              <span>{formation.name}</span>
+              <span className="sep">·</span>
+              <span className="accent">{formation.label}</span>
+              <span className="sw-bottom-divider" aria-hidden />
+              <span className="sw-bottom-meta">
+                <span className="opp-eyebrow">VS</span>
+                <span className="opp-tag">{diffCard.tag}</span>
+                <span className="opp-pundit">{diffCard.pundit}</span>
+              </span>
+            </div>
+            <div className="sw-bottom-line-2">
+              {busy
+                ? "the house is seeding the AI cap plan via DeepSeek — usually 1–3 seconds."
+                : `lot 1 opens the moment you take the floor. €1B treasury · 20s on the block · ${qTotal} lots tonight.`}
+            </div>
+          </div>
+          <div className="sw-bottom-cta">
+            <button
+              type="button"
+              className="sw-btn-bid"
+              onClick={takeToTheFloor}
+              disabled={busy}
+            >
+              {busy ? "PREPARING THE FLOOR…" : "▶ TAKE TO THE FLOOR"}
+            </button>
+          </div>
+          {error && <div className="sw-commit-err">{error}</div>}
         </div>
       </div>
     </>

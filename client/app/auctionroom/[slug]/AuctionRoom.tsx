@@ -512,6 +512,13 @@ function PlayerPhoto({
   const knownMissing = !src || src.includes("placeholder");
   const [failed, setFailed] = useState(knownMissing);
 
+  // Reset the failed flag when src changes — the bid arena reuses one
+  // PlayerPhoto instance across lots; without this, a missing image on lot N
+  // sticks `failed=true` and every later lot would render initials too.
+  useEffect(() => {
+    setFailed(!src || src.includes("placeholder"));
+  }, [src]);
+
   const initials =
     name
       .split(/\s+/)

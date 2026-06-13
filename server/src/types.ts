@@ -109,6 +109,8 @@ export type LotStateDTO = {
 export type MatchStateDTO = {
   matchId: string;
   formation: string;
+  /** Difficulty selected at create-time. Stays constant for the match. */
+  difficulty: string;
   status: MatchStatus;
   user: {
     budget: number;
