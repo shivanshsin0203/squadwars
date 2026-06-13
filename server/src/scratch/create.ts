@@ -14,16 +14,28 @@
 import { nanoid } from "nanoid";
 import { AuctionMatch } from "../match/AuctionMatch.js";
 import { poolStats } from "../match/playerPool.js";
-import { MATCH_ID_LENGTH, QUEUE_COUNTS, QUEUE_TOTAL } from "../config.js";
+import {
+  MATCH_ID_LENGTH,
+  DEFAULT_FORMATION,
+  getQueueCounts,
+  getQueueTotal,
+} from "../config.js";
+
+const formation = DEFAULT_FORMATION;
 
 console.log("─".repeat(72));
 console.log("Pool stats:", poolStats());
-console.log("Config:", { QUEUE_COUNTS, QUEUE_TOTAL, MATCH_ID_LENGTH });
+console.log("Config:", {
+  formation,
+  queueCounts: getQueueCounts(formation),
+  queueTotal: getQueueTotal(formation),
+  MATCH_ID_LENGTH,
+});
 console.log("─".repeat(72));
 
 const match = new AuctionMatch({
   matchId: nanoid(MATCH_ID_LENGTH),
-  formation: "4-3-3",
+  formation,
 });
 
 console.log("─".repeat(72));

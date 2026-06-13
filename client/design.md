@@ -253,12 +253,53 @@ Implemented in: the bid-holder banner (above +1/+5/+10), the HighestBidBoard. Wh
 
 ### Signature element per screen
 
-Each major screen has **one** signature: a single oversized, animated, identity-carrying element. The Auction Room's signature is the **split-flap countdown clock**. Everything else stays quiet around it.
+Each major screen has **one** signature: a single oversized, animated, identity-carrying element. The Auction Room's signature is the **split-flap countdown clock**. The Home / Chalkboard's signature is the **chalk-line pitch with markers that re-chalk themselves when you switch formation**. Everything else stays quiet around it.
 
 When designing a new page, decide what its signature is in the design plan *before* writing CSS. Examples for future screens:
 - **Match Result**: a huge full-time scoreboard with two side-by-side squad columns flipping in player by player.
-- **Squad Builder / Formation**: a chalk-line pitch with positions illuminated as you assign.
-- **Home / Lobby**: a turnstile-style match-finder reel.
+
+### The Landing pattern (`/`)
+
+The very first screen. A doorway, not a control panel. The hero is the brand wordmark.
+
+**Wordmark composition.** Two-color: `SQUAD` in `--chalk`, `WARS` in `--floodlight`. Saira Condensed weight 800, font-size clamped `clamp(72px, 13vw, 168px)`, line-height 0.86 so the two halves of the lockup feel like one mass, letter-spacing tightened to `-0.005em`. A soft floodlight `text-shadow: 0 0 32px rgba(255, 182, 39, 0.10)` reads as ambient stadium glow — not a drop-shadow effect, not a glow filter that "bounces."
+
+**Page rhythm.** Top: tiny catalog stamp (`SQUADWARS · MATCHDAY 01 · PRE-GAME`) + backend status — broadcast lower-third minimal. Middle: wordmark, tagline, one paragraph of body copy, the START button. Bottom: a single-line spec strip with `TREASURY · QUEUE · ON THE BLOCK · STARTING XI · SHAPES` as label/value pairs, hairline-divided from above. **Five facts about the game, no more.** Don't list features.
+
+**Entrance choreography.** Stagger the hero block in over 700ms total:
+- Wordmark: `sw-wordmark-in` 0ms — clip-path reveal top-to-bottom + 14px upward translate.
+- Tagline: 200ms `sw-fade-in`.
+- Body paragraph: 300ms `sw-fade-in`.
+- Commit row: 400ms `sw-fade-in`.
+
+One orchestrated moment, not five. After that the page is still.
+
+**The only commit.** A single chalk `sw-btn-bid` reading `▶ START GAME` with a slightly larger drop-shadow than auction-page bids (`0 10px 30px rgba(242, 237, 224, 0.22)`) — it's the page's only weight. Helper text right of it stays in `--font-mono` `--dim` so it can't compete. Clicking navigates to `/setup` (the Chalkboard). No formation choice on this page — that decision belongs to the Chalkboard.
+
+**Backend offline.** If `/health` 404s, the button still renders but explains itself before navigating — the landing should never push the user into a flow it can't deliver. Set the error in `--whistle-soft` adjacent to the button.
+
+### The Chalkboard pattern (Pre-match / `/setup`)
+
+The home page is a tactics chalkboard, not a marketing landing. The hero is the pitch.
+
+**Vertical pitch SVG.** ViewBox `0 0 100 140`. Own goal at the bottom (y ≈ 92), opposition box at the top (y ≈ 15). Lines: outer rectangle, halfway line at y=70, center circle r=11 at (50,70), top + bottom penalty + goal areas, four corner arcs, three faint spots. Stroke `--chalk-soft` 0.35 units for the soft lines, `rgba(242,237,224,0.18)` 0.4 for the touchlines (slightly brighter perimeter). Goal lines get the strong stroke too.
+
+**Player markers** (one per XI slot — sums to 11):
+- Filled chalk circle r=3.8 in viewBox units.
+- Stroke = category accent (whistle for ATT, floodlight for MID, keeper-blue for DEF, chalk for GK).
+- Outer 0.8-stroke "halo" ring at r+1.2 with 30% opacity in the same accent — gives each marker the floodlit glow.
+- Inside, single uppercase letter G / D / M / A (`--font-display`, weight 800, size r × 1.25) in `--ink`. Position implied by pitch coordinates; the letter codes the category, not the position role.
+
+**The re-chalk animation.** When the user picks a different formation, the SVG is keyed on `formation.name` so React remounts the markers. Each `<g>` runs a `sw-chalk-on` keyframe — `opacity 0 → 1`, `transform scale 0.4 → 1` over 460ms cubic-bezier. **Stagger order: GK first (0ms), then DEF (80ms), then MID (220ms), then ATT (360ms)** — a coach setting the team up from the back. Within a category, +40ms per marker index. Total cascade ≈ 700ms. **One animation, one moment** — the comparison between formations IS the morph.
+
+**Mini-pitches in tiles.** Same SVG, smaller. No letters inside markers, no halos. When a tile is selected (chalk fill, ink text), the marker circles invert to `--ink` fill with no stroke — they read as ink on chalk, matching the inverted tile state. When unselected, normal chalk fill + category-accent stroke.
+
+**Tile state pattern** (extension of the three-state ownership rule):
+- Selected: chalk fill, ink text, solid chalk border, soft chalk-glow shadow.
+- Hover: surface-1 background, solid `--chalk-soft` border (upgrade from dashed).
+- Rest: surface-1 background, **dashed** `--hairline-strong` border — encodes "pickable / not yet picked", consistent with dashed = empty/quiet elsewhere.
+
+**Tile label** uses a two-line stack: formation number (`4-3-3`) in mono 11px, then tactical identity (`THE ORTHODOXY`) in display 9px tracked 0.20em. Number is the *what*, identity is the *why*.
 
 ### Numbering that means something
 
@@ -345,6 +386,9 @@ Words are design material. Use the football auction lexicon, not generic UI labe
 | Spending detail | Ledger · Treasury detail               |
 | Squad synergy   | Chemistry · Brewing                    |
 | Bid (verb)      | Lodge bid                              |
+| Pre-match setup | Chalk the line · Pick your shape       |
+| Start match     | Take to the floor                      |
+| Formation name  | Shape · Identity (e.g. THE ORTHODOXY)  |
 
 ### Voice rules
 
@@ -394,5 +438,8 @@ Things observed in early drafts that we deleted. Don't bring them back.
 ## Reference
 
 - **Skill** (philosophy): `client/.agents/skills/frontend-design/SKILL.md`
-- **Live implementation**: `client/app/auctionroom/[slug]/AuctionRoom.tsx`
-- **Inline token block**: the `const tokens` template literal at the top of `AuctionRoom.tsx`. Copy this whole block into any new top-level component that needs the system.
+- **Live implementations**:
+  - Landing (`/`): `client/app/page.tsx`
+  - Chalkboard / formation picker (`/setup`): `client/app/setup/page.tsx`
+  - Auction Room (`/auctionroom/[slug]`): `client/app/auctionroom/[slug]/AuctionRoom.tsx`
+- **Inline token block**: the `const tokens` template literal at the top of `AuctionRoom.tsx` (and the parallel one in `page.tsx`). Copy this whole block into any new top-level component that needs the system.

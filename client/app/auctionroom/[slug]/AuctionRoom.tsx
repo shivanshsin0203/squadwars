@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Category, LotStateDTO, MatchStateDTO } from "@/lib/types";
 import { fmtCountdown, fmtMoney } from "@/lib/format";
@@ -17,13 +17,21 @@ type LotEndResp = MatchStateDTO & {
   };
 };
 
-// 4-3-3 starting XI = 1 GK + 4 DEF + 3 MID + 3 ATT = 11 players.
-const BUCKETS: Array<{ key: Category; label: string; target: number }> = [
-  { key: "ATT", label: "Attack", target: 3 },
-  { key: "MID", label: "Midfield", target: 3 },
-  { key: "DEF", label: "Defence", target: 4 },
-  { key: "GK", label: "Goalkeeper", target: 1 },
-];
+type Bucket = { key: Category; label: string; target: number };
+
+// XI composition per formation. Mirrors server config.FORMATIONS[name].targets.
+// Categories must sum to 11. Order = display order in the dressing room (ATT first, GK last).
+const FORMATION_BUCKETS: Record<string, Bucket[]> = {
+  "4-3-3":   [{ key: "ATT", label: "Attack", target: 3 }, { key: "MID", label: "Midfield", target: 3 }, { key: "DEF", label: "Defence", target: 4 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+  "4-4-2":   [{ key: "ATT", label: "Attack", target: 2 }, { key: "MID", label: "Midfield", target: 4 }, { key: "DEF", label: "Defence", target: 4 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+  "3-5-2":   [{ key: "ATT", label: "Attack", target: 2 }, { key: "MID", label: "Midfield", target: 5 }, { key: "DEF", label: "Defence", target: 3 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+  "5-3-2":   [{ key: "ATT", label: "Attack", target: 2 }, { key: "MID", label: "Midfield", target: 3 }, { key: "DEF", label: "Defence", target: 5 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+  "3-4-3":   [{ key: "ATT", label: "Attack", target: 3 }, { key: "MID", label: "Midfield", target: 4 }, { key: "DEF", label: "Defence", target: 3 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+  "4-2-3-1": [{ key: "ATT", label: "Attack", target: 1 }, { key: "MID", label: "Midfield", target: 5 }, { key: "DEF", label: "Defence", target: 4 }, { key: "GK", label: "Goalkeeper", target: 1 }],
+};
+function bucketsFor(formation: string | undefined): Bucket[] {
+  return FORMATION_BUCKETS[formation ?? "4-3-3"] ?? FORMATION_BUCKETS["4-3-3"];
+}
 
 /** Bucket fill tier color per user spec. */
 function bucketFillColor(filled: number, target: number): string {
@@ -446,12 +454,12 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
             youBought={state.user.bought.length}
             aiBudget={state.ai.budget}
             aiBought={state.ai.boughtCount}
-            totalSlots={BUCKETS.reduce((s, b) => s + b.target, 0)}
+            totalSlots={11}
           />
           <Ledger
             bought={state.user.bought}
             budget={state.user.budget}
-            totalSlots={BUCKETS.reduce((s, b) => s + b.target, 0)}
+            totalSlots={11}
           />
           <Chemistry bought={state.user.bought} />
         </div>
@@ -472,7 +480,7 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
         {/* RIGHT — Highest bid + Dressing Room */}
         <div className="sw-col">
           <HighestBidBoard lot={lot} lastResult={lastResult} />
-          <DressingRoom bought={state.user.bought} counts={userCounts} />
+          <DressingRoom bought={state.user.bought} counts={userCounts} formation={state.formation} />
         </div>
       </div>
     </div>
@@ -720,13 +728,16 @@ function Pill({
 function DressingRoom({
   bought,
   counts,
+  formation,
 }: {
   bought: Array<{
     player: { name: string; category: Category; primary_position: string; overall: number; photo_path: string };
     price: number;
   }>;
   counts: Record<Category, number>;
+  formation: string;
 }) {
+  const BUCKETS = useMemo(() => bucketsFor(formation), [formation]);
   const catAccent: Record<Category, string> = {
     ATT: "var(--whistle)",
     MID: "var(--floodlight)",
@@ -738,7 +749,7 @@ function DressingRoom({
     <div className="sw-card" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
       <span className="sw-tick-tl" /><span className="sw-tick-tr" />
       <span className="sw-tick-bl" /><span className="sw-tick-br" />
-      <div className="sw-corner-mark">FORMATION · 4-3-3</div>
+      <div className="sw-corner-mark">FORMATION · {formation}</div>
       <div className="sw-eyebrow" style={{ marginBottom: 10 }}>Dressing Room</div>
 
       <div className="sw-scroll" style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -2005,6 +2016,7 @@ function ClusterGroup({
 
 function CompleteView({ state }: { state: MatchStateDTO }) {
   const userTotalSpent = state.user.bought.reduce((s, b) => s + b.price, 0);
+  const BUCKETS = useMemo(() => bucketsFor(state.formation), [state.formation]);
   return (
     <div className="sw-auction">
       <style dangerouslySetInnerHTML={{ __html: tokens }} />

@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Category, Player } from "../types.js";
-import { QUEUE_COUNTS } from "../config.js";
+import { getQueueCounts } from "../config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // server/src/match/playerPool.ts  →  ../../players.json  →  server/players.json
@@ -54,18 +54,20 @@ function pickN<T>(arr: T[], n: number): T[] {
 // ─────────────────────────── public API ───────────────────────────
 
 /**
- * Build one match's auction queue:
- *   3 GK + 10 DEF + 10 MID + 10 ATT, jumbled across categories.
+ * Build one match's auction queue, sized to the chosen formation.
  *
- * Future hook: a formation-aware variant may bias positional needs (e.g. 5-3-2
- * draws more defenders). For now the composition is fixed per spec §6.
+ * Bucket counts come from config.FORMATIONS[formation].queue. The 6 formations
+ * yield queues of 33–35 lots: defence-heavy shapes (5-3-2) draw more DEFs,
+ * mid-heavy shapes (3-5-2, 4-2-3-1) draw more MIDs, ATT floored at 10 across
+ * the board to keep striker drama high regardless of shape.
  */
-export function buildQueue(): Player[] {
+export function buildQueue(formation: string): Player[] {
+  const counts = getQueueCounts(formation);
   const drawn = [
-    ...pickN(pool.GK, QUEUE_COUNTS.GK),
-    ...pickN(pool.DEF, QUEUE_COUNTS.DEF),
-    ...pickN(pool.MID, QUEUE_COUNTS.MID),
-    ...pickN(pool.ATT, QUEUE_COUNTS.ATT),
+    ...pickN(pool.GK, counts.GK),
+    ...pickN(pool.DEF, counts.DEF),
+    ...pickN(pool.MID, counts.MID),
+    ...pickN(pool.ATT, counts.ATT),
   ];
   return shuffle(drawn);
 }

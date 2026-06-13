@@ -22,7 +22,12 @@ import type { Context } from "hono";
 import { nanoid } from "nanoid";
 import { AuctionMatch } from "../match/AuctionMatch.js";
 import { getMatch, putMatch, withLock } from "../store.js";
-import { MATCH_ID_LENGTH } from "../config.js";
+import {
+  MATCH_ID_LENGTH,
+  DEFAULT_FORMATION,
+  FORMATION_NAMES,
+  isValidFormation,
+} from "../config.js";
 
 export const matchRoutes = new Hono();
 
@@ -67,10 +72,21 @@ function isPositiveInt(v: unknown): v is number {
 
 matchRoutes.post("/", async (c) => {
   const body = (await safeJson(c)) as { formation?: unknown } | null;
-  const formation =
+  const raw =
     body && typeof body.formation === "string" && body.formation.trim()
       ? body.formation.trim()
-      : "4-3-3";
+      : DEFAULT_FORMATION;
+
+  if (!isValidFormation(raw)) {
+    return c.json(
+      {
+        error: `unknown formation "${raw}"`,
+        allowed: FORMATION_NAMES,
+      },
+      400
+    );
+  }
+  const formation = raw;
 
   const matchId = nanoid(MATCH_ID_LENGTH);
   const match = new AuctionMatch({ matchId, formation });

@@ -33,19 +33,91 @@ export const HEURISTIC_CAP_BUDGET_FRACTION = 0.8;
 
 export const MIN_INCREMENT = 1_000_000;         // flat $1M increment for MVP
 
-// ───────── Queue composition (per match — depth of the auction pool) ─────────
+// ───────── Formations (queue + XI targets per shape) ─────────
+// Each formation defines:
+//   - queue: how many lots of each category appear in this match's auction pool
+//   - targets: how many of each category the XI needs (always sums to 11)
+//
+// Queue sizing rule used: GK=3 fixed (pool is small), each outfield bucket =
+// max(7, formationCount × 3), ATT floored to 10 to keep striker drama high,
+// then total trimmed to ≤35 by removing from the largest bucket.
+// Totals land in [33, 35] — every formation feels different in the queue.
 
-export const QUEUE_COUNTS = { GK: 3, DEF: 10, MID: 10, ATT: 10 } as const;
-export const QUEUE_TOTAL =
-  QUEUE_COUNTS.GK + QUEUE_COUNTS.DEF + QUEUE_COUNTS.MID + QUEUE_COUNTS.ATT; // 33
+export type Category = "GK" | "DEF" | "MID" | "ATT";
+export type Buckets = { GK: number; DEF: number; MID: number; ATT: number };
 
-// ───────── Formation targets (XI to fill — drives buckets + AI need ranking) ─────────
-// 4-3-3 starting XI = 1 GK + 4 DEF + 3 MID + 3 ATT = 11 players.
-// Buying more than these is allowed (depth) but adds no scoring value.
+export type FormationSpec = {
+  /** Tactical label (e.g. "THE ORTHODOXY") used in UI. */
+  label: string;
+  /** Per-side XI composition. Always sums to 11. */
+  targets: Buckets;
+  /** Per-match queue composition. Sums to 33–35. */
+  queue: Buckets;
+};
 
-export const FORMATION_TARGETS = { GK: 1, DEF: 4, MID: 3, ATT: 3 } as const;
-export const FORMATION_TOTAL =
-  FORMATION_TARGETS.GK + FORMATION_TARGETS.DEF + FORMATION_TARGETS.MID + FORMATION_TARGETS.ATT; // 11
+export const DEFAULT_FORMATION = "4-3-3" as const;
+
+export const FORMATIONS = {
+  "4-3-3": {
+    label: "THE ORTHODOXY",
+    targets: { GK: 1, DEF: 4, MID: 3, ATT: 3 },
+    queue:   { GK: 3, DEF: 12, MID: 9, ATT: 10 }, // 34
+  },
+  "4-4-2": {
+    label: "THE TWO BANKS",
+    targets: { GK: 1, DEF: 4, MID: 4, ATT: 2 },
+    queue:   { GK: 3, DEF: 11, MID: 11, ATT: 10 }, // 35
+  },
+  "3-5-2": {
+    label: "THE WING-BACK",
+    targets: { GK: 1, DEF: 3, MID: 5, ATT: 2 },
+    queue:   { GK: 3, DEF: 9, MID: 13, ATT: 10 }, // 35
+  },
+  "5-3-2": {
+    label: "THE SHELL",
+    targets: { GK: 1, DEF: 5, MID: 3, ATT: 2 },
+    queue:   { GK: 3, DEF: 13, MID: 9, ATT: 10 }, // 35
+  },
+  "3-4-3": {
+    label: "THE FRONT FOOT",
+    targets: { GK: 1, DEF: 3, MID: 4, ATT: 3 },
+    queue:   { GK: 3, DEF: 9, MID: 12, ATT: 10 }, // 34
+  },
+  "4-2-3-1": {
+    label: "THE MODERN",
+    targets: { GK: 1, DEF: 4, MID: 5, ATT: 1 },
+    queue:   { GK: 3, DEF: 11, MID: 11, ATT: 10 }, // 35
+  },
+} as const satisfies Record<string, FormationSpec>;
+
+export type FormationName = keyof typeof FORMATIONS;
+export const FORMATION_NAMES = Object.keys(FORMATIONS) as FormationName[];
+
+export function isValidFormation(name: string): name is FormationName {
+  return name in FORMATIONS;
+}
+
+export function getFormationSpec(name: string): FormationSpec {
+  if (!isValidFormation(name)) {
+    throw new Error(
+      `unknown formation "${name}" — allowed: ${FORMATION_NAMES.join(", ")}`
+    );
+  }
+  return FORMATIONS[name];
+}
+
+export function getQueueCounts(name: string): Buckets {
+  return getFormationSpec(name).queue;
+}
+
+export function getFormationTargets(name: string): Buckets {
+  return getFormationSpec(name).targets;
+}
+
+export function getQueueTotal(name: string): number {
+  const q = getQueueCounts(name);
+  return q.GK + q.DEF + q.MID + q.ATT;
+}
 
 // ───────── Match identity ─────────
 

@@ -32,8 +32,8 @@ import {
   LOT_DURATION_MS,
   LOT_END_TOLERANCE_MS,
   MIN_INCREMENT,
-  FORMATION_TARGETS,
-  QUEUE_TOTAL,
+  getFormationTargets,
+  getQueueTotal,
   STARTING_BUDGET,
 } from "../config.js";
 import { buildQueue } from "./playerPool.js";
@@ -103,11 +103,12 @@ export class AuctionMatch {
     this.matchId = opts.matchId;
     this.formation = opts.formation;
     this.createdAt = Date.now();
-    this.queue = buildQueue();
+    this.queue = buildQueue(opts.formation);
 
-    if (this.queue.length !== QUEUE_TOTAL) {
+    const expectedLen = getQueueTotal(opts.formation);
+    if (this.queue.length !== expectedLen) {
       throw new Error(
-        `AuctionMatch.ctor: expected queue length ${QUEUE_TOTAL}, got ${this.queue.length}`
+        `AuctionMatch.ctor: expected queue length ${expectedLen} for formation ${opts.formation}, got ${this.queue.length}`
       );
     }
 
@@ -592,11 +593,12 @@ export class AuctionMatch {
       upcomingContext.push(this.toUpcomingCtx(i, this.queue[i]));
     }
 
+    const formationTargets = getFormationTargets(this.formation);
     const targets = {
-      GK: FORMATION_TARGETS.GK,
-      DEF: FORMATION_TARGETS.DEF,
-      MID: FORMATION_TARGETS.MID,
-      ATT: FORMATION_TARGETS.ATT,
+      GK: formationTargets.GK,
+      DEF: formationTargets.DEF,
+      MID: formationTargets.MID,
+      ATT: formationTargets.ATT,
     };
     const aiCounts = { GK: 0, DEF: 0, MID: 0, ATT: 0 };
     for (const b of this.aiBought) aiCounts[b.player.category]++;
