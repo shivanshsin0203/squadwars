@@ -71,6 +71,8 @@ export type MatchStatus = "in_progress" | "complete";
 export type MatchStateDTO = {
   matchId: string;
   formation: string;
+  /** Difficulty selected at match-create time. Constant for the match. */
+  difficulty: string;
   status: MatchStatus;
   user: {
     budget: number;

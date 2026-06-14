@@ -30,6 +30,8 @@ type DifficultyCard = {
   blurb: string;
   /** Public asset path (under /public). */
   photo: string;
+  /** Surfaces a small "RECOMMENDED" badge on the tile. The canonical experience. */
+  recommended?: boolean;
 };
 
 const DIFFICULTIES: DifficultyCard[] = [
@@ -53,10 +55,13 @@ const DIFFICULTIES: DifficultyCard[] = [
     tag: "GOD MODE",
     blurb: "the shark. never lets an elite walk. ruthless with the wallet. always wins.",
     photo: "/hard.jpg",
+    recommended: true,
   },
 ];
 
-const DEFAULT_DIFFICULTY: DifficultyName = "easy";
+// Hard is the canonical experience — full lookahead + Henry persona + every server
+// cap-floor gets to flex. Easy/medium kept for lighter games.
+const DEFAULT_DIFFICULTY: DifficultyName = "hard";
 
 // ─────────────────────────── formation data (mirrors server FORMATIONS) ───────────────────────────
 
@@ -784,6 +789,31 @@ const tokens = `
     overflow: hidden;
   }
 
+  /* "RECOMMENDED" badge on the canonical-experience tile (hard). Floodlight
+     reads well against both the dark default tile bg and the chalk selected bg. */
+  .sw-diff-recommended {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 8px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--floodlight);
+    padding: 3px 6px 2px;
+    border-radius: var(--r-sm);
+    line-height: 1;
+    box-shadow: 0 2px 10px rgba(255, 182, 39, 0.35);
+    pointer-events: none;
+  }
+  .sw-diff-tile.is-selected .sw-diff-recommended {
+    /* on the chalk-bright selected tile, keep the badge legible by deepening it */
+    box-shadow: 0 2px 12px rgba(255, 182, 39, 0.55), 0 0 0 1px rgba(11, 16, 24, 0.20);
+  }
+
   /* bottom bar — pinned commit row */
   .sw-bottom-bar {
     flex: 0 0 auto;
@@ -1065,8 +1095,9 @@ function DifficultyTile({
       onClick={onSelect}
       className={`sw-diff-tile${selected ? " is-selected" : ""}`}
       aria-pressed={selected}
-      aria-label={`${diff.tag} — ${diff.pundit} AI`}
+      aria-label={`${diff.tag} — ${diff.pundit} AI${diff.recommended ? " (recommended)" : ""}`}
     >
+      {diff.recommended && <span className="sw-diff-recommended">RECOMMENDED</span>}
       <div className="sw-diff-portrait">
         {/* plain <img>: assets live under /public so the relative path resolves at root */}
         {/* eslint-disable-next-line @next/next/no-img-element */}

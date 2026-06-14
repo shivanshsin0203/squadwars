@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Category, LotStateDTO, MatchStateDTO } from "@/lib/types";
 import { fmtCountdown, fmtMoney } from "@/lib/format";
+import SquadBuilder from "../../squad-builder/SquadBuilder";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -423,7 +424,17 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
   }
 
   if (state.status === "complete") {
-    return <CompleteView state={state} />;
+    // Post-whistle: same URL, hand the squad-builder the same server-fetched data.
+    // Placement state is client-local — refresh re-fetches from the server and resets,
+    // which is what the spec asks for (no client-side tamper surface beyond placement).
+    return (
+      <SquadBuilder
+        bought={state.user.bought}
+        formation={state.formation}
+        difficulty={state.difficulty}
+        matchId={state.matchId}
+      />
+    );
   }
 
   const lot = state.lotState;
@@ -2014,72 +2025,6 @@ function ClusterGroup({
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────── Complete view ───────────────────────
-
-function CompleteView({ state }: { state: MatchStateDTO }) {
-  const userTotalSpent = state.user.bought.reduce((s, b) => s + b.price, 0);
-  const BUCKETS = useMemo(() => bucketsFor(state.formation), [state.formation]);
-  return (
-    <div className="sw-auction">
-      <style dangerouslySetInnerHTML={{ __html: tokens }} />
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 0" }}>
-        <div className="sw-eyebrow" style={{ marginBottom: 6 }}>FULL TIME</div>
-        <h1 className="sw-display" style={{ margin: "0 0 12px", fontSize: 48, fontWeight: 800, letterSpacing: "0.02em" }}>
-          MATCH COMPLETE
-        </h1>
-        <p style={{ color: "var(--muted)", marginTop: 0, fontSize: 13 }}>
-          All {state.lotsTotal} lots resolved. Squad building is the next phase (not built yet).
-        </p>
-
-        <div className="sw-card" style={{ marginTop: 24 }}>
-          <span className="sw-tick-tl" /><span className="sw-tick-tr" />
-          <span className="sw-tick-bl" /><span className="sw-tick-br" />
-          <div className="sw-eyebrow" style={{ marginBottom: 6 }}>Your squad</div>
-          <h3 className="sw-display" style={{ marginTop: 0, fontSize: 22, letterSpacing: "0.02em" }}>
-            {state.user.bought.length} PLAYERS
-          </h3>
-          <p style={{ fontSize: 12, color: "var(--muted)" }} className="sw-mono">
-            spent {fmtMoney(userTotalSpent)} · remaining {fmtMoney(state.user.budget)}
-          </p>
-          {BUCKETS.map((b) => {
-            const players = state.user.bought.filter((bp) => bp.player.category === b.key);
-            return (
-              <div key={b.key} style={{ marginTop: 12 }}>
-                <div className="sw-display" style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.10em" }}>
-                  {b.label.toUpperCase()}{" "}
-                  <span style={{ color: "var(--muted)", fontWeight: 500 }}>({players.length}/{b.target})</span>
-                </div>
-                <ul style={{ margin: "4px 0 0", padding: 0, listStyle: "none" }}>
-                  {players.map((p, i) => (
-                    <li key={i} style={{ fontSize: 13, color: "var(--muted)" }} className="sw-mono">
-                      {p.player.name} <span style={{ color: "var(--dim)" }}>· OVR {p.player.overall} · {fmtMoney(p.price)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="sw-card" style={{ marginTop: 16 }}>
-          <span className="sw-tick-tl" /><span className="sw-tick-tr" />
-          <span className="sw-tick-bl" /><span className="sw-tick-br" />
-          <div className="sw-eyebrow" style={{ marginBottom: 6 }}>Opposition</div>
-          <p style={{ fontSize: 12, color: "var(--muted)", margin: 0 }} className="sw-mono">
-            bought {state.ai.boughtCount} · remaining {fmtMoney(state.ai.budget)} · dossier sealed until result screen
-          </p>
-        </div>
-
-        <p style={{ marginTop: 24 }}>
-          <Link href="/" className="sw-eyebrow" style={{ color: "var(--chalk)" }}>
-            ← back to home
-          </Link>
-        </p>
       </div>
     </div>
   );

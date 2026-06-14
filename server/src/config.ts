@@ -157,7 +157,9 @@ export type DifficultySpec = {
   winMandate: string;
 };
 
-export const DEFAULT_DIFFICULTY: Difficulty = "easy";
+// Hard is the canonical "intended" experience — full lookahead, Henry persona,
+// the cap floors get to flex. Easy/medium remain for users who want a lighter game.
+export const DEFAULT_DIFFICULTY: Difficulty = "hard";
 
 export const DIFFICULTIES: Record<Difficulty, DifficultySpec> = {
   easy: {
