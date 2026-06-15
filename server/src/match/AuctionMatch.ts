@@ -21,7 +21,12 @@ import type {
   MatchStateDTO,
   MatchStatus,
   Player,
+  ResultPayload,
   Side,
+  Squad,
+  SquadBenchEntry,
+  SquadXIEntry,
+  Verdict,
 } from "../types.js";
 import {
   ANTI_SNIPE_MS,
@@ -49,6 +54,12 @@ import {
   type LlmCapRequest,
   type UpcomingPlayerCtx,
 } from "../llm/deepseek.js";
+import {
+  planAiSquad,
+  writeVerdictProse,
+} from "../llm/squadBuilder.js";
+import { computeVerdict } from "./verdict.js";
+import { getSlots } from "./squadFormations.js";
 
 export type AuctionMatchCtor = {
   matchId: string;
@@ -105,6 +116,18 @@ export class AuctionMatch {
 
   // ─────── current lot (null between lots and before lot 1 opens) ───────
   lotState: LotState | null = null;
+
+  // ─────── result phase ───────
+  /** AI's chosen XI + bench — populated by background LLM call after match completes. */
+  aiSquadPlan: Squad | null = null;
+  /** In-flight promise so submitUserResult can await if the user clicks RESULT
+   *  before the background plan returns. Resolves to the Squad (or fallback). */
+  private aiSquadPlanPromise: Promise<Squad> | null = null;
+  /** User's frozen XI submitted via /result. Set exactly once on the transition
+   *  to status="result"; never mutated afterwards. */
+  userResultXI: Squad | null = null;
+  /** Final verdict (categories, score, prose). Set exactly once on transition. */
+  verdict: Verdict | null = null;
 
   constructor(opts: AuctionMatchCtor) {
     this.matchId = opts.matchId;
@@ -392,6 +415,9 @@ export class AuctionMatch {
       console.log(
         `[MATCH:endLot] id=${this.matchId} MATCH-COMPLETE lotsDone=${this.lotIndex}/${this.queue.length}`
       );
+      // Fire-and-forget AI squad pick. User builds their XI while this runs in
+      // the background; submitUserResult awaits this promise if it's still hot.
+      this.kickoffAiSquadPlanning();
     } else {
       this.startLot(); // chain to next lot
       // Fire-and-forget LLM refresh for the next 2 lots beyond the one we just opened.
@@ -405,6 +431,10 @@ export class AuctionMatch {
   /**
    * Snapshot for the client. Strips: queue, cap, AI plan due timestamp, AI bought
    * players' identities (only the count). Converts `dueAt` to relative `delayMs`.
+   *
+   * When status === "result", the `result` field reveals both finalised squads
+   * + AI's full bought list. Outside of result, `result` is null and the AI's
+   * identity stays hidden per spec §4.
    */
   toClientDTO(): MatchStateDTO {
     return {
@@ -423,6 +453,22 @@ export class AuctionMatch {
       lotsTotal: this.queue.length,
       lotsDone: this.lotIndex, // = lots already resolved
       lotState: this.lotState ? this.toClientLotDTO(this.lotState) : null,
+      result: this.buildResultPayload(),
+    };
+  }
+
+  private buildResultPayload(): ResultPayload | null {
+    if (this.status !== "result") return null;
+    if (!this.userResultXI || !this.aiSquadPlan || !this.verdict) return null;
+    const userTotalSpent = this.userBought.reduce((a, b) => a + b.price, 0);
+    const aiTotalSpent = this.aiBought.reduce((a, b) => a + b.price, 0);
+    return {
+      userSquad: this.userResultXI,
+      aiSquad: this.aiSquadPlan,
+      aiBought: this.aiBought,
+      userTotalSpent,
+      aiTotalSpent,
+      verdict: this.verdict,
     };
   }
 
@@ -789,6 +835,227 @@ export class AuctionMatch {
       country: p.country,
       value_eur: p.value_eur,
     };
+  }
+
+  // ─────────────────────────── result phase ───────────────────────────
+
+  /**
+   * Fire-and-forget: ask the LLM to pick AI's best XI + bench from its roster.
+   * Stores the in-flight promise on the instance so submitUserResult can await
+   * it. Idempotent — second invocation is a no-op once the plan is ready.
+   *
+   * Called from endLot() when the match transitions to "complete". A user can
+   * spend 30+ seconds dragging players around; this call happens in that window.
+   */
+  private kickoffAiSquadPlanning(): void {
+    if (this.aiSquadPlan || this.aiSquadPlanPromise) {
+      console.log(
+        `[MATCH:ai-xi] id=${this.matchId} kickoff SKIPPED (already ${this.aiSquadPlan ? "done" : "in-flight"})`
+      );
+      return;
+    }
+    console.log(`[MATCH:ai-xi] id=${this.matchId} KICKOFF rosterSize=${this.aiBought.length}`);
+    const diffSpec = getDifficultySpec(this.difficulty);
+    this.aiSquadPlanPromise = planAiSquad({
+      matchId: this.matchId,
+      formation: this.formation,
+      roster: this.aiBought,
+      persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
+    })
+      .then((res) => {
+        this.aiSquadPlan = res.squad;
+        // Roll usage into the match-level accumulators so /debug reflects total cost.
+        this.llmCallCount += 1;
+        if (res.source === "fallback") this.llmCallsFailed += 1;
+        this.llmPromptTokens += res.usage.promptTokens;
+        this.llmCachedPromptTokens += res.usage.cachedPromptTokens;
+        this.llmCompletionTokens += res.usage.completionTokens;
+        this.llmTotalTokens += res.usage.totalTokens;
+        this.llmTotalCostUsd += res.usage.costUsd;
+        this.llmTotalLatencyMs += res.usage.latencyMs;
+        console.log(
+          `[MATCH:ai-xi] id=${this.matchId} DONE source=${res.source} xi=${res.squad.xi.length} bench=${res.squad.bench.length}`
+        );
+        return res.squad;
+      })
+      .catch((err) => {
+        console.log(
+          `[MATCH:ai-xi] id=${this.matchId} CRASHED: ${(err as Error).message} — using empty squad`
+        );
+        // Last-resort safety: return an empty squad. submitUserResult will treat
+        // missing AI squad as "all categories lost" rather than 500'ing.
+        const empty: Squad = { xi: [], bench: [] };
+        this.aiSquadPlan = empty;
+        return empty;
+      });
+  }
+
+  /**
+   * Frozen-XI submission from the user (drag-drop placement in SquadBuilder).
+   * Validates the XI, awaits AI squad plan if still in flight, computes verdict
+   * deterministically, calls the prose LLM, transitions to status="result".
+   *
+   * One-way: once status==="result", further calls return the cached payload
+   * without re-running anything. Refresh-safe because state lives on the match.
+   */
+  async submitUserResult(
+    xi: SquadXIEntry[],
+    bench: SquadBenchEntry[]
+  ): Promise<
+    | { ok: true; dto: MatchStateDTO }
+    | { ok: false; reason: string }
+  > {
+    // Idempotency — RESULT clicked twice, or polled after first call.
+    if (this.status === "result") {
+      console.log(`[MATCH:result] id=${this.matchId} already in result phase — returning cached`);
+      return { ok: true, dto: this.toClientDTO() };
+    }
+    if (this.status !== "complete") {
+      return { ok: false, reason: `cannot submit result while status=${this.status}` };
+    }
+
+    const validation = this.validateUserSquad(xi, bench);
+    if (!validation.ok) return validation;
+
+    // Make sure AI squad plan is in flight if not already (defensive — endLot
+    // should have kicked it off but if something raced or the match was hand-
+    // created this guarantees we have one).
+    if (!this.aiSquadPlan && !this.aiSquadPlanPromise) {
+      console.log(`[MATCH:result] id=${this.matchId} AI plan missing — kicking off now`);
+      this.kickoffAiSquadPlanning();
+    }
+
+    if (this.aiSquadPlanPromise && !this.aiSquadPlan) {
+      console.log(`[MATCH:result] id=${this.matchId} awaiting in-flight AI plan…`);
+      try {
+        await this.aiSquadPlanPromise;
+      } catch (err) {
+        console.log(
+          `[MATCH:result] id=${this.matchId} AI plan await failed: ${(err as Error).message}`
+        );
+      }
+    }
+    const aiSquad: Squad = this.aiSquadPlan ?? { xi: [], bench: [] };
+
+    const userSquad: Squad = { xi, bench };
+    const diffSpec = getDifficultySpec(this.difficulty);
+
+    // Deterministic numeric verdict first.
+    const verdict = computeVerdict({
+      formation: this.formation,
+      userSquad,
+      aiSquad,
+      userBought: this.userBought,
+      aiBought: this.aiBought,
+      personaName: diffSpec.personaName,
+    });
+
+    const userTotalSpent = this.userBought.reduce((a, b) => a + b.price, 0);
+    const aiTotalSpent = this.aiBought.reduce((a, b) => a + b.price, 0);
+
+    // Prose pass.
+    const prose = await writeVerdictProse({
+      matchId: this.matchId,
+      formation: this.formation,
+      persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
+      verdict,
+      userBought: this.userBought,
+      aiBought: this.aiBought,
+      userTotalSpent,
+      aiTotalSpent,
+    });
+    verdict.report = prose.report;
+    verdict.roast = prose.roast;
+
+    // Roll prose usage into accumulators.
+    this.llmCallCount += 1;
+    if (prose.source === "fallback") this.llmCallsFailed += 1;
+    this.llmPromptTokens += prose.usage.promptTokens;
+    this.llmCachedPromptTokens += prose.usage.cachedPromptTokens;
+    this.llmCompletionTokens += prose.usage.completionTokens;
+    this.llmTotalTokens += prose.usage.totalTokens;
+    this.llmTotalCostUsd += prose.usage.costUsd;
+    this.llmTotalLatencyMs += prose.usage.latencyMs;
+
+    this.userResultXI = userSquad;
+    this.verdict = verdict;
+    this.status = "result";
+
+    console.log(
+      `[MATCH:result] id=${this.matchId} TRANSITION→result winner=${verdict.winner} ` +
+        `score=${verdict.score.user}-${verdict.score.ai} userOvr=${verdict.userOverall} ` +
+        `aiOvr=${verdict.aiOverall} userChem=${verdict.userChem} aiChem=${verdict.aiChem} ` +
+        `aiPlanSrc=${this.aiSquadPlan && this.aiSquadPlan.xi.length === 11 ? "ok" : "partial"} ` +
+        `proseSrc=${prose.source}`
+    );
+
+    this.persist();
+    return { ok: true, dto: this.toClientDTO() };
+  }
+
+  /**
+   * Validate user's submitted XI + bench:
+   *   - XI has exactly 11 entries
+   *   - Every slotId is real for the formation; no slot duplicated
+   *   - Every playerId belongs to userBought; no player duplicated across xi/bench
+   *   - Bench length ≤ 5; bench indices are 0..n-1 unique
+   * Returns ok or a 400-shaped error.
+   */
+  private validateUserSquad(
+    xi: SquadXIEntry[],
+    bench: SquadBenchEntry[]
+  ): { ok: true } | { ok: false; reason: string } {
+    if (!Array.isArray(xi) || xi.length !== 11) {
+      return { ok: false, reason: `xi must have exactly 11 entries, got ${xi?.length ?? "n/a"}` };
+    }
+    if (!Array.isArray(bench)) {
+      return { ok: false, reason: "bench must be an array" };
+    }
+    if (bench.length > 5) {
+      return { ok: false, reason: `bench may have at most 5 entries, got ${bench.length}` };
+    }
+
+    const slots = getSlots(this.formation);
+    const slotIds = new Set(slots.map((s) => s.id));
+    const userPlayerIds = new Set(this.userBought.map((b) => b.player.id));
+    const seenSlots = new Set<string>();
+    const seenPlayers = new Set<number>();
+
+    for (const e of xi) {
+      if (typeof e?.slotId !== "string" || !slotIds.has(e.slotId)) {
+        return { ok: false, reason: `unknown slotId in xi: ${e?.slotId}` };
+      }
+      if (seenSlots.has(e.slotId)) {
+        return { ok: false, reason: `slotId duplicated in xi: ${e.slotId}` };
+      }
+      if (typeof e.playerId !== "number" || !userPlayerIds.has(e.playerId)) {
+        return { ok: false, reason: `playerId ${e.playerId} not in your bought list` };
+      }
+      if (seenPlayers.has(e.playerId)) {
+        return { ok: false, reason: `playerId duplicated: ${e.playerId}` };
+      }
+      seenSlots.add(e.slotId);
+      seenPlayers.add(e.playerId);
+    }
+
+    const seenBenchIdx = new Set<number>();
+    for (const e of bench) {
+      if (typeof e?.index !== "number" || !Number.isInteger(e.index) || e.index < 0 || e.index > 4) {
+        return { ok: false, reason: `bench index out of range: ${e?.index}` };
+      }
+      if (seenBenchIdx.has(e.index)) {
+        return { ok: false, reason: `bench index duplicated: ${e.index}` };
+      }
+      if (typeof e.playerId !== "number" || !userPlayerIds.has(e.playerId)) {
+        return { ok: false, reason: `bench playerId ${e.playerId} not in your bought list` };
+      }
+      if (seenPlayers.has(e.playerId)) {
+        return { ok: false, reason: `bench playerId ${e.playerId} also in xi` };
+      }
+      seenBenchIdx.add(e.index);
+      seenPlayers.add(e.playerId);
+    }
+    return { ok: true };
   }
 
   // ─────────────────────────── persistence boundary ───────────────────────────

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { Category, LotStateDTO, MatchStateDTO } from "@/lib/types";
 import { fmtCountdown, fmtMoney } from "@/lib/format";
 import SquadBuilder from "../../squad-builder/SquadBuilder";
+import ResultScreen from "../../squad-builder/ResultScreen";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -282,7 +283,9 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
         const s0 = (await api("/state")) as MatchStateDTO;
         if (cancelled) return;
         console.log(`[CLIENT:state] status=${s0.status} lotState=${s0.lotState ? `lot ${s0.lotState.lotIndex}` : "null"}`);
-        if (s0.status === "complete") {
+        if (s0.status === "complete" || s0.status === "result") {
+          // No lot to open — squad-builder / result-screen takes over.
+          // result is refresh-safe because the server keeps the verdict cached.
           setState(s0);
           return;
         }
@@ -423,16 +426,40 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
     );
   }
 
+  if (state.status === "result" && state.result) {
+    // Terminal phase. Refresh-safe: server holds the verdict so a reload re-renders
+    // the same screen. No back-button to SquadBuilder — placement is frozen forever.
+    return (
+      <ResultScreen
+        payload={state.result}
+        userBought={state.user.bought}
+        formation={state.formation}
+        difficulty={state.difficulty}
+        matchId={state.matchId}
+      />
+    );
+  }
+
   if (state.status === "complete") {
     // Post-whistle: same URL, hand the squad-builder the same server-fetched data.
     // Placement state is client-local — refresh re-fetches from the server and resets,
     // which is what the spec asks for (no client-side tamper surface beyond placement).
+    // onSubmit: POST the frozen XI to the server, then drop the verdict DTO into
+    // local state. AuctionRoom flips into the "result" branch on the next render
+    // and ResultScreen takes over — no extra polling needed.
     return (
       <SquadBuilder
         bought={state.user.bought}
         formation={state.formation}
         difficulty={state.difficulty}
         matchId={state.matchId}
+        onSubmit={async (xi, bench) => {
+          const dto = (await api("/result", {
+            method: "POST",
+            body: JSON.stringify({ xi, bench }),
+          })) as MatchStateDTO;
+          setState(dto);
+        }}
       />
     );
   }

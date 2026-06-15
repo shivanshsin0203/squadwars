@@ -45,11 +45,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import type { BoughtPlayer, Category, Player } from "@/lib/types";
+import type { BoughtPlayer, Category, Player, SquadBenchEntry, SquadXIEntry } from "@/lib/types";
 
 // ─────────────────────────── slot tables (per formation) ───────────────────────────
 
-type XISlotDef = {
+export type XISlotDef = {
   id: string;
   pos: string;
   cat: Category;
@@ -58,13 +58,13 @@ type XISlotDef = {
   y: number;
 };
 
-type FormationDef = {
+export type FormationDef = {
   name: string;
   label: string;
   slots: XISlotDef[];
 };
 
-const FORMATIONS: Record<string, FormationDef> = {
+export const FORMATIONS: Record<string, FormationDef> = {
   "4-3-3": {
     name: "4-3-3",
     label: "THE ORTHODOXY",
@@ -536,6 +536,48 @@ const tokens = `
   }
   .sw-pitch-head-left {
     display: inline-flex; align-items: center; gap: 12px;
+  }
+  .sw-pitch-head-right {
+    display: inline-flex; align-items: center; gap: 10px;
+    margin-right: 70px;
+  }
+  .sw-result-cta {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 12px;
+    padding: 8px 16px;
+    background: var(--chalk);
+    color: var(--ink);
+    border: 1px solid var(--chalk);
+    border-radius: var(--r-md);
+    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 8px 26px rgba(242, 237, 224, 0.18);
+    cursor: pointer;
+  }
+  .sw-result-cta:hover:not(:disabled) {
+    filter: brightness(1.05);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 10px 30px rgba(242, 237, 224, 0.28);
+  }
+  .sw-result-cta:active:not(:disabled) { transform: translateY(1px); }
+  .sw-result-cta:disabled {
+    background: var(--surface-3);
+    color: var(--muted);
+    border-color: var(--hairline-strong);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .sw-result-err {
+    font-family: var(--font-display);
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--whistle);
+    background: var(--whistle-soft);
+    border: 1px solid rgba(230, 57, 70, 0.45);
+    padding: 5px 8px;
+    border-radius: var(--r-sm);
+    max-width: 260px;
   }
   .sw-meter-chip {
     display: inline-flex; align-items: center; gap: 6px;
@@ -1220,6 +1262,55 @@ const tokens = `
     line-height: 1.45;
   }
   .sw-chem-pop-note .strong { color: var(--chalk); font-weight: 600; }
+
+  /* ─── Responsive: laptop (1024-1366) — give the pitch more vertical room
+     by shrinking the dossier strip + bench chip + photo. Pitch frame grows
+     naturally because it has flex:1 inside .sw-page-flex.  ─── */
+  @media (max-width: 1366px) {
+    .sw-sb {
+      padding: 8px 12px;
+    }
+    .sw-dossier-strip {
+      min-height: 108px;
+      max-height: 130px;
+      padding: 8px 12px;
+      gap: 12px;
+      grid-template-columns: auto minmax(150px, 1fr) minmax(150px, 0.9fr) minmax(150px, 0.9fr) minmax(240px, 1.2fr);
+    }
+    .sw-dossier-photo-sm { width: 88px; height: 88px; }
+    .sw-dossier-name { font-size: 18px; }
+    .sw-bench-card { padding: 8px 12px 10px; }
+    .sw-bench-slot { height: 56px; }
+    .sw-pitch-head { padding-right: 60px; }
+    .sw-pitch-head-right { margin-right: 60px; }
+    .sw-result-cta { padding: 7px 12px; font-size: 11px; }
+  }
+  /* ─── Tablet (768-1023) — stack pitch/bench on top, pool below, dossier at bottom. ─── */
+  @media (max-width: 1023px) {
+    .sw-sb {
+      height: auto;
+      min-height: 100vh;
+      overflow: auto;
+      padding: 8px 10px;
+    }
+    .sw-grid-top {
+      grid-template-columns: 1fr;
+      min-height: 0;
+      flex: none;
+    }
+    .sw-pitch-wrap {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    .sw-dossier-strip {
+      grid-template-columns: 1fr;
+      min-height: auto;
+      max-height: none;
+      gap: 10px;
+    }
+    .sw-dossier-photo-sm { width: 72px; height: 72px; }
+    .sw-bench-slot { height: 52px; }
+  }
 `;
 
 // ─────────────────────────── reusable bits ───────────────────────────
@@ -1647,8 +1738,16 @@ export type SquadBuilderProps = {
   formation: string;
   /** Difficulty name from MatchStateDTO (e.g. "hard"). Displayed only. */
   difficulty: string;
-  /** Optional match ID — surfaced in the top-meta strip so it's clear which match this builds for. */
+  /** Optional match ID — surfaced in the top-meta strip. */
   matchId?: string;
+  /**
+   * Optional submit handler. If provided, the VIEW RESULT button becomes active
+   * once all 11 XI slots are filled and clicking it calls this handler with the
+   * frozen placement. The parent owns whatever happens next (POST to the server,
+   * swap to a dummy result for dev preview, etc.). A rejected promise surfaces
+   * its message as an inline error. Omit to hide the button entirely.
+   */
+  onSubmit?: (xi: SquadXIEntry[], bench: SquadBenchEntry[]) => Promise<void>;
 };
 
 export default function SquadBuilder({
@@ -1656,6 +1755,7 @@ export default function SquadBuilder({
   formation,
   difficulty,
   matchId,
+  onSubmit,
 }: SquadBuilderProps) {
   const formationDef = FORMATIONS[formation] ?? FORMATIONS[DEFAULT_FORMATION];
 
@@ -1794,6 +1894,45 @@ export default function SquadBuilder({
     [bought, placement]
   );
 
+  // ─────────────── RESULT submission ───────────────
+  // Builds the frozen XI + bench from `placement` and hands it to the parent via
+  // `onSubmit`. The parent is responsible for whatever happens next — POSTing to
+  // /api/match/:id/result in production, or swapping in a dummy ResultPayload on
+  // the dev sandbox. SquadBuilder never knows which is which.
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const allFilled = startersFilled === 11;
+  const canSubmit = !!onSubmit && allFilled && !submitting;
+
+  const submitResult = useCallback(async () => {
+    if (!onSubmit) {
+      setSubmitError("This build can't submit yet.");
+      return;
+    }
+    if (!allFilled) {
+      setSubmitError("Place all 11 starters first.");
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError(null);
+    const xi: SquadXIEntry[] = [];
+    const bench: SquadBenchEntry[] = [];
+    for (const [pidRaw, loc] of Object.entries(placement)) {
+      const pid = Number(pidRaw);
+      if (loc.kind === "xi") xi.push({ slotId: loc.slotId, playerId: pid });
+      else if (loc.kind === "bench") bench.push({ index: loc.index, playerId: pid });
+    }
+    try {
+      await onSubmit(xi, bench);
+      // On success, parent should swap us out of the tree — but if not, leave the
+      // submitting state on so the button stays disabled to avoid double-submit.
+    } catch (err) {
+      setSubmitError((err as Error).message || "Result submission failed.");
+      setSubmitting(false);
+    }
+  }, [onSubmit, placement, allFilled]);
+
   return (
     <>
       <style>{tokens}</style>
@@ -1835,6 +1974,28 @@ export default function SquadBuilder({
                     <MeterChip label="OVR" value={overall} max={99} accent="chalk" />
                     <ChemMeterChip chem={chem} />
                   </div>
+                  {onSubmit && (
+                    <div className="sw-pitch-head-right">
+                      {submitError && (
+                        <span className="sw-result-err" role="alert">{submitError}</span>
+                      )}
+                      <button
+                        type="button"
+                        className="sw-result-cta"
+                        disabled={!canSubmit}
+                        onClick={submitResult}
+                        title={
+                          !allFilled
+                            ? `place ${11 - startersFilled} more starter(s)`
+                            : submitting
+                            ? "submitting…"
+                            : "lock the XI and view the result"
+                        }
+                      >
+                        {submitting ? "FINALISING…" : `VIEW RESULT →`}
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="sw-pitch-frame">
                   <div className="sw-pitch-wrap">

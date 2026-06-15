@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import ViewportGate from "../_components/ViewportGate";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -745,6 +746,10 @@ const tokens = `
   .sw-diff-portrait img {
     width: 100%; height: 100%;
     object-fit: cover;
+    /* All three pundit photos have the head in the upper portion of the source
+       image. Default 50%/50% centering crops the top of the head. 30% nudges
+       the visible window upward so faces stay framed at any aspect ratio. */
+    object-position: 50% 30%;
     display: block;
     filter: grayscale(0.10) contrast(1.05);
     transition: filter 0.18s ease;
@@ -918,6 +923,64 @@ const tokens = `
     border: 1px solid rgba(230, 57, 70, 0.30);
     border-radius: var(--r-sm);
     padding: 7px 9px;
+  }
+
+  /* ─── Responsive: laptop heights (≤820px). The locked 100vh layout was
+     pushing the bottom bar off-screen because the chain (top · main · diff
+     card · commit bar) summed to more than the viewport. Compress paddings +
+     font sizes so the whole stack fits. For pundit portraits: drop the 4:3
+     aspect lock, give them an explicit shorter height, and use
+     object-position: 50% 25% so the FACE/HEAD stays visible — only the
+     shoulders/mic get cropped. ─── */
+  @media (max-height: 820px) {
+    .sw-chalkboard { padding: 8px 12px; }
+
+    .sw-tile { padding: 6px 6px 7px; gap: 2px; }
+    .sw-tile-mini { max-height: 90px; }
+    .sw-readout { padding: 10px 12px; gap: 7px; }
+
+    .sw-diff-card { padding: 9px 12px; }
+    .sw-diff-head { margin-bottom: 6px; }
+    .sw-diff-grid { gap: 6px; }
+    .sw-diff-tile { padding: 6px 6px 8px; gap: 4px; }
+    .sw-diff-portrait {
+      aspect-ratio: auto;       /* override the default 4:3 lock */
+      height: 130px;            /* explicit cap so the strip stays compact */
+    }
+    .sw-diff-portrait img {
+      object-position: 50% 25%; /* face stays framed; only mic/shoulders crop */
+    }
+    .sw-diff-blurb { -webkit-line-clamp: 2; font-size: 10px; line-height: 1.30; }
+    .sw-diff-pundit { font-size: 11px; }
+    .sw-diff-tag { font-size: 8.5px; }
+
+    .sw-bottom-bar { padding: 8px 12px; margin-top: 8px; }
+    .sw-bottom-cta { min-width: 200px; }
+    .sw-bottom-cta .sw-btn-bid { padding: 11px 18px; font-size: 13px; }
+    .sw-bottom-line-1 { font-size: 12px; gap: 10px; }
+    .sw-bottom-line-2 { font-size: 10.5px; }
+  }
+  /* Even tighter for very short laptops (~720p) — same shape, smaller numbers. */
+  @media (max-height: 720px) {
+    .sw-chalkboard { padding: 6px 10px; }
+    .sw-tile-mini { max-height: 78px; }
+    .sw-diff-card { padding: 7px 10px; }
+    .sw-diff-portrait { height: 108px; }
+    .sw-diff-blurb { -webkit-line-clamp: 1; }
+    .sw-bottom-bar { padding: 7px 10px; margin-top: 6px; }
+    .sw-bottom-cta .sw-btn-bid { padding: 9px 14px; font-size: 12px; }
+  }
+
+  /* ─── Tablet (≤900px wide) — collapse the two-column main grid to a single
+     column so the formation tiles + readout don't fight for width. Bottom bar
+     stacks. ViewportGate handles below 600px wide and shows a rotate hint for
+     600-1023 portrait. This rule only kicks in if the user dismissed the hint
+     and continued in portrait. ─── */
+  @media (max-width: 900px) {
+    .sw-board-grid { grid-template-columns: 1fr; }
+    .sw-bottom-bar { grid-template-columns: 1fr; gap: 10px; }
+    .sw-bottom-cta { min-width: 0; }
+    .sw-bottom-cta .sw-btn-bid { width: 100%; }
   }
 `;
 
@@ -1178,7 +1241,7 @@ export default function SetupPage() {
   const qTotal = queueTotal(formation.queue);
 
   return (
-    <>
+    <ViewportGate pageLabel="MATCH SETUP">
       <style>{tokens}</style>
       <div className="sw-chalkboard">
         {/* top bar */}
@@ -1366,6 +1429,6 @@ export default function SetupPage() {
           {error && <div className="sw-commit-err">{error}</div>}
         </div>
       </div>
-    </>
+    </ViewportGate>
   );
 }

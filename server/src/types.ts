@@ -82,7 +82,71 @@ export type LotState = {
   pendingAiPlan: AiPlanState | null;
 };
 
-export type MatchStatus = "in_progress" | "complete";
+/**
+ * Match lifecycle:
+ *   "in_progress" → auction lots running
+ *   "complete"    → all lots resolved, user is in squad-builder
+ *   "result"      → user has submitted their XI; verdict computed; one-way terminal state
+ */
+export type MatchStatus = "in_progress" | "complete" | "result";
+
+// ─────────────────────────── Squad / result phase ───────────────────────────
+
+/**
+ * Where a single owned player sits in the XI / bench / unused pool.
+ * Mirrored on the client (`client/lib/types.ts`) — keep both in sync.
+ */
+export type Placement =
+  | { kind: "pool" }
+  | { kind: "xi"; slotId: string }
+  | { kind: "bench"; index: number };
+
+export type SquadXIEntry = { slotId: string; playerId: number };
+export type SquadBenchEntry = { index: number; playerId: number };
+
+/**
+ * A finalised side (user OR ai) as 11 starters + up to 5 bench. PlayerIds index
+ * into the side's `bought` array — client looks them up there for display.
+ */
+export type Squad = {
+  xi: SquadXIEntry[];
+  bench: SquadBenchEntry[];
+};
+
+export type CategoryName = "Attack" | "Midfield" | "Defence" | "Chemistry" | "Budget eff.";
+
+export type VerdictCategory = {
+  name: CategoryName;
+  user: number;
+  ai: number;
+  winner: "user" | "ai" | "draw";
+};
+
+export type Verdict = {
+  winner: "user" | "ai" | "draw";
+  score: { user: number; ai: number };          // category-wins tally (e.g. 3-2)
+  categories: VerdictCategory[];                // 5 entries
+  report: string;                               // LLM-written, ≤2 sentences
+  roast: string;                                // LLM-written persona voice; ≤2 sentences
+  personaName: string;                          // who wrote the roast (Henry / Carragher / Micah)
+  userOverall: number;                          // headline OVR shown on banner
+  aiOverall: number;
+  userChem: number;
+  aiChem: number;
+};
+
+/**
+ * Sent to the client only when status === "result". Reveals the AI's full bought
+ * list (normally hidden) plus both finalised squads + the verdict.
+ */
+export type ResultPayload = {
+  userSquad: Squad;
+  aiSquad: Squad;
+  aiBought: BoughtPlayer[];                     // <-- reveal; mirror of server's aiBought
+  userTotalSpent: number;
+  aiTotalSpent: number;
+  verdict: Verdict;
+};
 
 // ─────────────────────────── Wire DTOs (client-facing) ───────────────────────────
 
@@ -104,7 +168,8 @@ export type LotStateDTO = {
 
 /**
  * Top-level match snapshot for the client. Per spec §4 the AI's actual bought
- * players are HIDDEN during the auction — only the count is shared.
+ * players are HIDDEN during the auction — only the count is shared. They are
+ * REVEALED inside `result.aiBought` once the match transitions to "result".
  */
 export type MatchStateDTO = {
   matchId: string;
@@ -123,4 +188,6 @@ export type MatchStateDTO = {
   lotsTotal: number;
   lotsDone: number;              // = lotIndex (or queue.length when complete)
   lotState: LotStateDTO | null;
+  /** Populated iff status === "result". Holds both squads + verdict + AI reveal. */
+  result: ResultPayload | null;
 };

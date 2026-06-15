@@ -66,7 +66,53 @@ export type LotStateDTO = {
   aiPlan: AiPlanDTO | null;
 };
 
-export type MatchStatus = "in_progress" | "complete";
+export type MatchStatus = "in_progress" | "complete" | "result";
+
+// ─────────────────────────── Squad / result phase ───────────────────────────
+
+/** Mirror of the placement model used by SquadBuilder for drag-drop state. */
+export type Placement =
+  | { kind: "pool" }
+  | { kind: "xi"; slotId: string }
+  | { kind: "bench"; index: number };
+
+export type SquadXIEntry = { slotId: string; playerId: number };
+export type SquadBenchEntry = { index: number; playerId: number };
+export type Squad = {
+  xi: SquadXIEntry[];
+  bench: SquadBenchEntry[];
+};
+
+export type CategoryName = "Attack" | "Midfield" | "Defence" | "Chemistry" | "Budget eff.";
+
+export type VerdictCategory = {
+  name: CategoryName;
+  user: number;
+  ai: number;
+  winner: "user" | "ai" | "draw";
+};
+
+export type Verdict = {
+  winner: "user" | "ai" | "draw";
+  score: { user: number; ai: number };
+  categories: VerdictCategory[];
+  report: string;
+  roast: string;
+  personaName: string;
+  userOverall: number;
+  aiOverall: number;
+  userChem: number;
+  aiChem: number;
+};
+
+export type ResultPayload = {
+  userSquad: Squad;
+  aiSquad: Squad;
+  aiBought: BoughtPlayer[];     // revealed only when status === "result"
+  userTotalSpent: number;
+  aiTotalSpent: number;
+  verdict: Verdict;
+};
 
 export type MatchStateDTO = {
   matchId: string;
@@ -85,4 +131,6 @@ export type MatchStateDTO = {
   lotsTotal: number;
   lotsDone: number;
   lotState: LotStateDTO | null;
+  /** Populated when status === "result"; null otherwise. */
+  result: ResultPayload | null;
 };

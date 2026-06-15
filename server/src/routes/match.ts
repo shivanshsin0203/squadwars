@@ -274,6 +274,41 @@ matchRoutes.get("/:id/debug", async (c) => {
   });
 });
 
+// ─────────────────────────── POST /api/match/:id/result ───────────────────────────
+// User finishes building XI in SquadBuilder and clicks RESULT. Body carries the
+// frozen XI placement; server verdict + LLM prose runs synchronously and the
+// DTO returned contains the full result payload (both squads + verdict).
+// Idempotent: once status === "result", repeated calls return the cached payload.
+
+matchRoutes.post("/:id/result", async (c) => {
+  const id = c.req.param("id");
+  const body = (await safeJson(c)) as
+    | { xi?: unknown; bench?: unknown }
+    | null;
+
+  if (
+    !body ||
+    !Array.isArray(body.xi) ||
+    !Array.isArray(body.bench)
+  ) {
+    return c.json(
+      { error: "body must be { xi: [{slotId, playerId}], bench: [{index, playerId}] }" },
+      400
+    );
+  }
+  // Shallow normalisation; deep validation lives in submitUserResult.
+  const xi = body.xi as Array<{ slotId: string; playerId: number }>;
+  const bench = body.bench as Array<{ index: number; playerId: number }>;
+
+  return withLock(id, async () => {
+    const m = getMatch(id);
+    if (!m) return c.json({ error: "match not found" }, 404);
+    const r = await m.submitUserResult(xi, bench);
+    if (!r.ok) return c.json({ error: r.reason }, 400);
+    return c.json(r.dto);
+  });
+});
+
 // ─────────────────────────── POST /api/match/:id/lot-end ───────────────────────────
 
 matchRoutes.post("/:id/lot-end", async (c) => {
