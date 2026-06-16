@@ -381,6 +381,10 @@ const tokens = `
     display: flex; flex-direction: column; gap: 10px;
     min-width: 0; min-height: 0;
   }
+  /* Hard clip — content is now sized to fit at every viewport via clamp() +
+     breakpoint compression, so any residual overflow is a layout bug to fix,
+     not something to silently scroll past. */
+  .sw-board-right { overflow: hidden; }
 
   /* big pitch card */
   .sw-pitch-card {
@@ -469,7 +473,9 @@ const tokens = `
     width: 100%;
     aspect-ratio: 100 / 140;
     display: block;
-    max-height: 105px;
+    /* Fluid cap: shrinks with viewport so two rows of tiles always leave
+       headroom for queue + diff cards below. 10vh ≈ 96px at 960h, 80px at 800h, 60px at 600h. */
+    max-height: clamp(58px, 10vh, 108px);
   }
   .sw-tile-name {
     font-family: var(--font-mono);
@@ -737,7 +743,11 @@ const tokens = `
   .sw-diff-portrait {
     position: relative;
     width: 100%;
-    aspect-ratio: 4 / 3;
+    /* Fluid height (replaces the rigid 4:3 lock + per-breakpoint pixel
+       override). Scales smoothly with viewport so the whole right-column
+       stack fits without snapping. 15vh ≈ 144px at 960h, 120px at 800h,
+       90px at 600h. Capped both ends so portraits stay flattering. */
+    height: clamp(78px, 15vh, 180px);
     overflow: hidden;
     border-radius: var(--r-sm);
     background: var(--surface-3);
@@ -936,21 +946,24 @@ const tokens = `
     .sw-chalkboard { padding: 8px 12px; }
 
     .sw-tile { padding: 6px 6px 7px; gap: 2px; }
-    .sw-tile-mini { max-height: 90px; }
     .sw-readout { padding: 10px 12px; gap: 7px; }
+
+    .sw-queue-card { padding: 9px 12px; }
+    .sw-queue-head { margin-bottom: 6px; }
+    .sw-queue-cell { padding: 6px 4px 5px; }
+    .sw-queue-cell-num { font-size: 17px; }
 
     .sw-diff-card { padding: 9px 12px; }
     .sw-diff-head { margin-bottom: 6px; }
     .sw-diff-grid { gap: 6px; }
     .sw-diff-tile { padding: 6px 6px 8px; gap: 4px; }
-    .sw-diff-portrait {
-      aspect-ratio: auto;       /* override the default 4:3 lock */
-      height: 130px;            /* explicit cap so the strip stays compact */
-    }
     .sw-diff-portrait img {
       object-position: 50% 25%; /* face stays framed; only mic/shoulders crop */
     }
-    .sw-diff-blurb { -webkit-line-clamp: 2; font-size: 10px; line-height: 1.30; }
+    /* Blurb is the lowest-value diff-card content (the tag + face + name + the
+       opponent line in the bottom bar already communicate the pick). Drop it on
+       shorter viewports so portraits + names stay fully visible without scroll. */
+    .sw-diff-blurb { display: none; }
     .sw-diff-pundit { font-size: 11px; }
     .sw-diff-tag { font-size: 8.5px; }
 
@@ -963,10 +976,9 @@ const tokens = `
   /* Even tighter for very short laptops (~720p) — same shape, smaller numbers. */
   @media (max-height: 720px) {
     .sw-chalkboard { padding: 6px 10px; }
-    .sw-tile-mini { max-height: 78px; }
     .sw-diff-card { padding: 7px 10px; }
-    .sw-diff-portrait { height: 108px; }
-    .sw-diff-blurb { -webkit-line-clamp: 1; }
+    .sw-queue-card { padding: 7px 10px; }
+    .sw-queue-cell-num { font-size: 15px; }
     .sw-bottom-bar { padding: 7px 10px; margin-top: 6px; }
     .sw-bottom-cta .sw-btn-bid { padding: 9px 14px; font-size: 12px; }
   }
