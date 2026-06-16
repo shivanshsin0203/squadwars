@@ -45,7 +45,7 @@ if (!apiKey) {
 // timeouts during a single match (6 failed of 34 calls). 20s leaves real
 // margin for the API's occasional slow queue without making the seed call
 // feel broken to the user. The bid loop never blocks on these calls anyway.
-const LLM_TIMEOUT_MS = 20_000;
+const LLM_TIMEOUT_MS = 25_000;
 
 // ─────────────────────────── public types ───────────────────────────
 

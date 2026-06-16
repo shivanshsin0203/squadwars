@@ -29,6 +29,10 @@ type DifficultyCard = {
   tag: string;
   /** One-line voice — what to expect at the floor. */
   blurb: string;
+  /** 2-3 word punch-line distilled from the blurb. Surfaced inline in the
+   *  bottom bar on viewports where the diff-card blurb is hidden, so the
+   *  pundit's flavour still reaches the player on a compact screen. */
+  short: string;
   /** Public asset path (under /public). */
   photo: string;
   /** Surfaces a small "RECOMMENDED" badge on the tile. The canonical experience. */
@@ -41,6 +45,7 @@ const DIFFICULTIES: DifficultyCard[] = [
     pundit: "Micah Richards AI",
     tag: "TEST HIM",
     blurb: "warm, instinctive, plays the room. balanced bidder — honest and fair on the floor.",
+    short: "warm, instinctive.",
     photo: "/easy.webp",
   },
   {
@@ -48,6 +53,7 @@ const DIFFICULTIES: DifficultyCard[] = [
     pundit: "Jamie Carragher AI",
     tag: "AGGRESSIVE",
     blurb: "fierce, opinionated. if he wants him, he SNATCHES him. won't back down on his picks.",
+    short: "fierce, opinionated.",
     photo: "/medium.jpg",
   },
   {
@@ -55,6 +61,7 @@ const DIFFICULTIES: DifficultyCard[] = [
     pundit: "Thierry Henry AI",
     tag: "GOD MODE",
     blurb: "the shark. never lets an elite walk. ruthless with the wallet. always wins.",
+    short: "the shark.",
     photo: "/hard.jpg",
     recommended: true,
   },
@@ -474,8 +481,8 @@ const tokens = `
     aspect-ratio: 100 / 140;
     display: block;
     /* Fluid cap: shrinks with viewport so two rows of tiles always leave
-       headroom for queue + diff cards below. 10vh ≈ 96px at 960h, 80px at 800h, 60px at 600h. */
-    max-height: clamp(58px, 10vh, 108px);
+       headroom for queue + diff cards below. 9vh ≈ 86px at 960h, 72px at 800h, 54px at 600h. */
+    max-height: clamp(54px, 9vh, 100px);
   }
   .sw-tile-name {
     font-family: var(--font-mono);
@@ -745,9 +752,10 @@ const tokens = `
     width: 100%;
     /* Fluid height (replaces the rigid 4:3 lock + per-breakpoint pixel
        override). Scales smoothly with viewport so the whole right-column
-       stack fits without snapping. 15vh ≈ 144px at 960h, 120px at 800h,
-       90px at 600h. Capped both ends so portraits stay flattering. */
-    height: clamp(78px, 15vh, 180px);
+       stack fits without snapping. 13vh ≈ 125px at 960h, 104px at 800h,
+       78px at 600h. Capped both ends so portraits stay flattering and the
+       diff card always leaves breathing room for the bottom bar. */
+    height: clamp(74px, 13vh, 168px);
     overflow: hidden;
     border-radius: var(--r-sm);
     background: var(--surface-3);
@@ -909,6 +917,25 @@ const tokens = `
     color: var(--text);
     text-transform: none;
   }
+  /* Punch-line distilled from the pundit blurb. Hidden by default; surfaces
+     only on shorter viewports (≤820h) where the full blurb in the diff card
+     is dropped — gives the laptop view its flavour back without overloading
+     the bottom bar on big screens. Quiet body italic so it grace-notes
+     instead of competing with the opp-pundit name. */
+  .sw-bottom-meta .opp-flavor {
+    display: none;
+    font-family: var(--font-body);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 10.5px;
+    letter-spacing: 0.01em;
+    color: var(--muted);
+    text-transform: lowercase;
+    padding-left: 8px;
+    border-left: 1px solid var(--hairline-strong);
+    margin-left: 2px;
+    line-height: 1.1;
+  }
   .sw-bottom-line-2 {
     font-family: var(--font-body);
     font-size: 11px;
@@ -972,6 +999,10 @@ const tokens = `
     .sw-bottom-cta .sw-btn-bid { padding: 11px 18px; font-size: 13px; }
     .sw-bottom-line-1 { font-size: 12px; gap: 10px; }
     .sw-bottom-line-2 { font-size: 10.5px; }
+
+    /* Flavour tag becomes visible on the laptop breakpoint — this is where
+       we hid the in-card blurb, so the bottom bar carries the voice instead. */
+    .sw-bottom-meta .opp-flavor { display: inline-block; }
   }
   /* Even tighter for very short laptops (~720p) — same shape, smaller numbers. */
   @media (max-height: 720px) {
@@ -1420,6 +1451,7 @@ export default function SetupPage() {
                 <span className="opp-eyebrow">VS</span>
                 <span className="opp-tag">{diffCard.tag}</span>
                 <span className="opp-pundit">{diffCard.pundit}</span>
+                <span className="opp-flavor" aria-hidden>{diffCard.short}</span>
               </span>
             </div>
             <div className="sw-bottom-line-2">

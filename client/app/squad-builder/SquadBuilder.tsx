@@ -1285,6 +1285,49 @@ const tokens = `
     .sw-pitch-head-right { margin-right: 60px; }
     .sw-result-cta { padding: 7px 12px; font-size: 11px; }
   }
+  /* ─── Responsive: short-height laptops (≤900h) — give the pitch back its
+     vertical bias. On a wide-but-short laptop (e.g. 1920×1080 at 125-150% DPI
+     scaling) the max-width:1366 rule above never fires, so the dossier stayed
+     at full ~150px and squeezed the pitch into a cramped strip. This rule
+     keys on height instead and trims the dossier + bench so the squad
+     drawing board — the actual focus of this page — gets the lion's share
+     of the viewport. ─── */
+  @media (max-height: 900px) {
+    .sw-sb {
+      padding: 8px 12px;
+    }
+    .sw-dossier-strip {
+      min-height: 86px;
+      max-height: 104px;
+      padding: 7px 12px;
+      gap: 12px;
+      grid-template-columns: auto minmax(140px, 1fr) minmax(140px, 0.9fr) minmax(140px, 0.9fr) minmax(220px, 1.2fr);
+    }
+    .sw-dossier-photo-sm { width: 74px; height: 74px; }
+    .sw-dossier-photo-sm .sw-photo-initials { font-size: 26px; }
+    .sw-dossier-name { font-size: 16px; }
+    .sw-dossier-id { font-size: 9px; }
+    .sw-pos-chip { font-size: 9px; padding: 2px 6px 1px; }
+    .sw-pill { padding: 4px 7px 5px; }
+    .sw-pill-eyebrow { font-size: 8px; }
+    .sw-pill-val { font-size: 11px; }
+    .sw-stat-cell { padding: 4px 4px 5px; }
+    .sw-stat-val { font-size: 14px; }
+    .sw-stat-key { font-size: 8.5px; }
+    .sw-bench-card { padding: 6px 12px 8px; }
+    .sw-bench-slot { height: 50px; }
+    .sw-pitch-head { padding-right: 60px; }
+    .sw-pitch-head-right { margin-right: 60px; }
+    .sw-result-cta { padding: 6px 11px; font-size: 11px; }
+  }
+  /* Even tighter for ~720p laptops — same shape, smaller numbers. */
+  @media (max-height: 760px) {
+    .sw-dossier-strip { min-height: 76px; max-height: 92px; padding: 6px 10px; }
+    .sw-dossier-photo-sm { width: 64px; height: 64px; }
+    .sw-dossier-name { font-size: 14px; }
+    .sw-stat-val { font-size: 12px; }
+    .sw-bench-slot { height: 44px; }
+  }
   /* ─── Tablet (768-1023) — stack pitch/bench on top, pool below, dossier at bottom. ─── */
   @media (max-width: 1023px) {
     .sw-sb {
