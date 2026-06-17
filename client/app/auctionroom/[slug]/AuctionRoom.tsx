@@ -215,7 +215,11 @@ const tokens = `
     height: calc(100vh - 70px);
     min-height: 620px;
   }
-  @media (max-width: 1180px) {
+  /* The grid's column minimums sum to ~1070px, so 1080 is the practical floor
+     before the layout would actually overflow. iPad Mini (1133) and iPad Pro 11"
+     (1194) in landscape keep the 3-column broadcast layout. iPad 10.2" (1080)
+     and below collapse to a single readable column. */
+  @media (max-width: 1080px) {
     .sw-grid { grid-template-columns: 1fr; height: auto; }
   }
   .sw-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }

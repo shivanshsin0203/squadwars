@@ -1,22 +1,25 @@
 "use client";
 
 /**
- * ViewportGate · viewport-aware splash for narrow / portrait devices.
+ * ViewportGate · viewport-aware splash for devices that can't deliver the
+ * laptop-grade experience the game is built for.
  *
- * Three modes based on the live viewport:
+ * Three modes, checked in priority order:
  *
- *   1. width < 600px                    → PHONE SPLASH.
+ *   1. width < 600px                          → PHONE SPLASH.
  *      Drag-drop on tiny screens is fundamentally broken; show a "use a larger
  *      screen" message with a continue-anyway escape hatch.
  *
- *   2. 600px ≤ width < 1024px AND portrait orientation → ROTATE HINT.
+ *   2. 600px ≤ width < 1024px AND portrait    → ROTATE HINT.
  *      Tablet held vertically. Landscape is much friendlier for this game's
  *      wide layouts (auction strip, side-by-side squad comparison). Show a
  *      lightweight "rotate to landscape" hint, dismissable.
  *
- *   3. otherwise                        → PASS THROUGH.
- *      Renders children normally. Includes desktops, laptops, tablet
- *      landscape, and tablet portrait ≥ 1024px wide (iPad Pro).
+ *   3. otherwise                              → PASS THROUGH.
+ *      Renders children normally. Tablets in landscape are supported — the
+ *      squad-builder uses mobile-drag-drop polyfill (see SquadBuilder.tsx) so
+ *      touch DnD works, and the auction-room collapses at 1080px instead of
+ *      1180px so iPad Mini and iPad Pro 11" keep the 3-column broadcast layout.
  *
  * Once a user clicks "Continue anyway" the override sticks for the session.
  */

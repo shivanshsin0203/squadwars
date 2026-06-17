@@ -45,6 +45,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { polyfill as polyfillTouchDnd } from "mobile-drag-drop";
+import { scrollBehaviourDragImageTranslateOverride } from "mobile-drag-drop/scroll-behaviour";
+import "mobile-drag-drop/default.css";
 import type { BoughtPlayer, Category, Player, SquadBenchEntry, SquadXIEntry } from "@/lib/types";
 
 // ─────────────────────────── slot tables (per formation) ───────────────────────────
@@ -349,6 +352,16 @@ const tokens = `
 
   html, body { margin: 0; padding: 0; height: 100%; }
 
+  /* mobile-drag-drop's default.css forgets pointer-events:none on the drag
+     image. Without it document.elementFromPoint(touchX, touchY) returns the
+     drag image (which is between the finger and the page), so the polyfill
+     never finds the real drop target underneath — drops silently fail. */
+  .dnd-poly-drag-image {
+    pointer-events: none !important;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   .sw-sb {
     --ink: #0B1018;
     --surface-1: #131A24;
@@ -510,7 +523,12 @@ const tokens = `
     flex: 1;
     min-height: 0;
   }
-  @media (max-width: 1180px) {
+  /* Pitch col min (580) + pool col min (330) + gap (10) = 920px. 940 is the
+     practical floor before the layout would actually overflow. iPad Mini (1133),
+     iPad 10.2 (1080), iPad Pro 11" (1194), and every Android landscape tablet
+     keep the laptop-style 2-column layout (pitch + pool side-by-side). Below
+     940px we hand off to the explicit phone/portrait stacking rule below. */
+  @media (max-width: 940px) {
     .sw-grid-top { grid-template-columns: 1fr; }
   }
   .sw-col {
@@ -651,6 +669,7 @@ const tokens = `
     z-index: 2;
     user-select: none;
     transition: opacity 0.18s ease;
+    touch-action: none;
   }
   .sw-xi-slot.is-dragging-source { opacity: 0.28; }
   .sw-xi-slot.is-drag-over .sw-slot-disc-empty,
@@ -755,6 +774,7 @@ const tokens = `
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     transition: border-color 0.12s, background 0.12s, box-shadow 0.12s, opacity 0.18s;
+    touch-action: none;
   }
   .sw-bench-slot:hover { border-color: var(--chalk-soft); background: #161F2C; border-style: solid; }
   .sw-bench-slot.is-drag-over {
@@ -880,6 +900,11 @@ const tokens = `
     padding: 5px 7px;
     cursor: grab;
     transition: background 0.12s, border-color 0.12s, opacity 0.18s;
+    /* pan-y hands quick vertical swipes to the browser (so the pool list scrolls
+       naturally on touch). The polyfill's 200ms hold then wins on a deliberate
+       press-and-hold, taking over once a drag is in progress regardless of axis.
+       Result: swipe to scroll, long-press to drag — standard mobile pattern. */
+    touch-action: pan-y;
   }
   .sw-pool-row:hover { background: #131C28; }
   .sw-pool-row.is-placed { opacity: 0.32; }
@@ -1328,8 +1353,11 @@ const tokens = `
     .sw-stat-val { font-size: 12px; }
     .sw-bench-slot { height: 44px; }
   }
-  /* ─── Tablet (768-1023) — stack pitch/bench on top, pool below, dossier at bottom. ─── */
-  @media (max-width: 1023px) {
+  /* ─── Phone / portrait-tablet (≤ 939) — stack pitch/bench on top, pool below,
+     dossier at bottom. Landscape tablets (1080+) stay in the laptop 2-column
+     layout above; only phones and screens narrow enough that side-by-side
+     would overflow fall through to this stack. ─── */
+  @media (max-width: 939px) {
     .sw-sb {
       height: auto;
       min-height: 100vh;
@@ -1823,6 +1851,28 @@ export default function SquadBuilder({
     setSelectedId(null);
   }, [initialPlacement]);
 
+  // Touch-device drag support. The squad-builder uses native HTML5 drag-and-drop
+  // (draggable + onDragStart/onDrop), which iPad Safari and Android Chrome do not
+  // fire reliably from touch input. mobile-drag-drop synthesizes drag events from
+  // touch events.
+  //
+  // forceApply: true — modern iPad Safari claims native drag support but its
+  //   touch handling is gated behind a ~750ms long-press and is buggy. Force the
+  //   polyfill on so touch behaves consistently across iOS/Android.
+  // holdToDrag: 200 — standard mobile pattern: a quick swipe scrolls the pool
+  //   list (pan-y on .sw-pool-row hands that to the browser), a deliberate
+  //   ~200ms press-and-hold starts a drag. This is how native iOS/Android
+  //   drag-and-drop reads to users.
+  // dragImageTranslateOverride — fixes the iOS quirk where the drag image lags
+  //   the finger when the page scrolls under it.
+  useEffect(() => {
+    polyfillTouchDnd({
+      forceApply: true,
+      holdToDrag: 200,
+      dragImageTranslateOverride: scrollBehaviourDragImageTranslateOverride,
+    });
+  }, []);
+
   const buyById = useMemo(() => {
     const m = new Map<number, BoughtPlayer>();
     for (const b of bought) m.set(b.player.id, b);
@@ -2022,10 +2072,16 @@ export default function SquadBuilder({
                       {submitError && (
                         <span className="sw-result-err" role="alert">{submitError}</span>
                       )}
+                      {/* translate="no" + suppressHydrationWarning together
+                          stop the iPad/Chrome auto-translate from rewriting the
+                          button's text/attrs between SSR and hydration — that
+                          rewrite was showing up as a "disabled={null}" diff. */}
                       <button
                         type="button"
                         className="sw-result-cta"
-                        disabled={!canSubmit}
+                        translate="no"
+                        suppressHydrationWarning
+                        disabled={canSubmit ? undefined : true}
                         onClick={submitResult}
                         title={
                           !allFilled
@@ -2035,7 +2091,7 @@ export default function SquadBuilder({
                             : "lock the XI and view the result"
                         }
                       >
-                        {submitting ? "FINALISING…" : `VIEW RESULT →`}
+                        {submitting ? "FINALISING…" : "VIEW RESULT →"}
                       </button>
                     </div>
                   )}
