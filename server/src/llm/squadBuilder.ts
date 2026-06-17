@@ -253,7 +253,7 @@ export async function planAiSquad(
         // the model produced wrong-category placements (e.g. Pedri at RCB) because
         // the −45 OVR penalty rule was treated like creative guidance. 0.6 keeps
         // some variety in the picks while letting the model focus on the math.
-        temperature: 0.6,
+        temperature: 0.5,
         maxTokens: 700,
       });
       const parsed = JSON.parse(content) as { xi?: unknown; bench?: unknown };

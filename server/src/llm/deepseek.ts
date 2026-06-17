@@ -626,12 +626,12 @@ function validatePlan(
     const sameCatRemaining = req.remainingByCategory[expected.category];
     const mustBuy = sameCatDeficit > 0 && sameCatDeficit >= sameCatRemaining;
     if (mustBuy) {
-      const mandatoryFloor = Math.max(cap, Math.floor(expected.value_eur * 2.0));
+      const mandatoryFloor = Math.max(cap, Math.floor(expected.value_eur * 2.5));
       if (mandatoryFloor > cap) {
         console.log(
           `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
             `MUST-BUY (${expected.category} deficit=${sameCatDeficit}, remaining=${sameCatRemaining}) — ` +
-            `cap €${cap.toLocaleString("en-US")} → €${mandatoryFloor.toLocaleString("en-US")} (2.0× value_eur)`
+            `cap €${cap.toLocaleString("en-US")} → €${mandatoryFloor.toLocaleString("en-US")} (2.5× value_eur)`
         );
         cap = mandatoryFloor;
         floorNote += " [MUST-BUY]";

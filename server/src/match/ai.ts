@@ -12,6 +12,7 @@ import {
   HEURISTIC_CAP_DIVISOR,
   HEURISTIC_CAP_BUDGET_FRACTION,
   MIN_INCREMENT,
+  AI_MAX_INCREMENT_STEPS,
 } from "../config.js";
 
 /**
@@ -40,15 +41,33 @@ export function computeHeuristicCap(
  * Compute the amount the AI would bid right now, given current lot state and
  * its cap. Returns null if the AI would walk (cap can't reach the next bid).
  *
- * Bid policy: always the minimum amount that takes the lead — currentBid + $1M,
- * or $1M to open. If that exceeds cap, walk.
+ * Bid policy:
+ *   - The smallest legal raise is currentBid + MIN_INCREMENT (or just
+ *     MIN_INCREMENT to open). If even that exceeds the cap, walk.
+ *   - Otherwise pick a random raise of N × MIN_INCREMENT where
+ *     N ∈ [1, AI_MAX_INCREMENT_STEPS]. Random > deterministic +€1M because
+ *     it makes the auction feel like a real bidder pushing rather than a
+ *     ratchet machine, and it shortens lots when the AI feels strongly.
+ *   - Hard-clamp the resulting bid to cap so we never overpay relative to
+ *     the player's valuation. Cap is already budget-aware (computeHeuristicCap
+ *     clamps to a fraction of remaining budget), so a bid ≤ cap is also ≤
+ *     budget — the upstream checkValidBid pass will not reject this.
  */
 export function computeAiBidAmount(opts: {
   currentBid: number;
   cap: number;
 }): number | null {
   const { currentBid, cap } = opts;
-  const desired = currentBid === 0 ? MIN_INCREMENT : currentBid + MIN_INCREMENT;
-  if (desired > cap) return null; // walk
-  return desired;
+
+  const minDesired =
+    currentBid === 0 ? MIN_INCREMENT : currentBid + MIN_INCREMENT;
+  if (minDesired > cap) return null; // walk — can't even afford the floor raise
+
+  // Random raise in [1, AI_MAX_INCREMENT_STEPS] × MIN_INCREMENT.
+  const steps = 1 + Math.floor(Math.random() * AI_MAX_INCREMENT_STEPS);
+  const desired = currentBid + steps * MIN_INCREMENT;
+
+  // Never exceed cap. Because minDesired ≤ cap and desired ≥ minDesired, the
+  // clamped result is always a valid legal raise.
+  return Math.min(desired, cap);
 }

@@ -36,7 +36,12 @@ export const BENCH_TARGET = 5;
 
 // ───────── Bidding ─────────
 
-export const MIN_INCREMENT = 1_000_000;         // flat $1M increment for MVP
+export const MIN_INCREMENT = 1_000_000;         // €1M — the smallest legal raise; also human bid-validation floor
+// AI raises are a random integer multiple of MIN_INCREMENT in
+// [1, AI_MAX_INCREMENT_STEPS]. So the bid bump is anywhere from +€1M up to
+// +€9M, making the AI feel less robotic than a flat +€1M ratchet. The result
+// is still always clamped to cap (and therefore budget) inside ai.ts.
+export const AI_MAX_INCREMENT_STEPS = 4;
 
 // ───────── Formations (queue + XI targets per shape) ─────────
 // Each formation defines:
