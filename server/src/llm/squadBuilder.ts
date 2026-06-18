@@ -540,7 +540,7 @@ YOU WRITE TWO PIECES OF COPY.
                    gap — that confirmed the result.
                Tight prose, ~55 words total, every sentence earning its place.
 
-  2. roast   — THE AI'S VOICE on the result, in persona. ≤ 2 sentences, ≤ 30 words TOTAL.
+  2. roast   — THE AI'S VOICE on the result, in persona. ≤ 3 sentences, ≤ 50 words TOTAL.
                Sign off with —{persona.name} on the last line.
                BEHAVIOUR — pick exactly ONE side, do not mix:
                  • verdict.winner == "ai"   → ROAST. Pick ONE concrete user weakness
