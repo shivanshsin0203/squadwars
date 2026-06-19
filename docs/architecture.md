@@ -19,11 +19,16 @@ SquadWars is a 1v1 live football auction game. You and an AI bidder take turns a
 | Server runtime | Node 22 + Hono | Hono is Cloudflare Workers-native; this lets the entire server move to a Worker + Durable Object later with **only** the `store.ts` and the listener replaced. The match logic doesn't change. |
 | Server build | `tsx watch --env-file=.env` | No build step in dev. Hot-reload picks up edits in ~300ms. |
 | Type system | TypeScript strict, ESM-only (`"type": "module"`, `.js` suffixes on relative imports) | ESM is what Workers will need too. |
+| Input validation | `zod@4` + `@hono/zod-validator` | Every POST body is parsed via `zValidator("json", Schema)` middleware. Shapes live in `server/src/schemas/match.ts`; failures 400 with the Zod issue tree. Replaces hand-rolled type guards. |
+| LLM output validation | `zod@4` per-row `safeParse` | `validatePlan` (caps) + `validateSquadJson` (XI/bench) + verdict-prose parser now run a Zod parse for structural checks; the 7 semantic floors / repair pass / wrong-position swap remain as separate functions. One bad row no longer kills the batch. |
+| Rate limiting | `hono-rate-limiter` with the default `MemoryStore` (no Redis) | 7 scoped limiters per route — `MemoryStore` is two `Map`s with a sweep timer (~150 bytes/IP/limiter). Library `Store` interface means a future swap to `UnstorageStore` (Cloudflare KV) or `RedisStore` is one config block. See §5.7. |
+| Session binding | HttpOnly cookie `sw_session` issued on match-create | 32-char `nanoid` bound to the `AuctionMatch` instance. `requireSession` middleware checks it on every `/api/match/:id/*` request. Closes the matchId-as-bearer-token risk. See §5.7. |
 | LLM | DeepSeek `deepseek-chat` via the OpenAI SDK (`baseURL: "https://api.deepseek.com"`) | Cheap (~$0.14 per 1M cache-miss input tokens, $0.0028 cache-hit), strong JSON-mode adherence, and the prompt cache is reliable across same-system-prompt calls. |
 | Client framework | Next.js 16.2.9 (App Router, Turbopack) | The auction loop is a client component that mounts once and stays mounted; Next does the routing chrome. |
 | Client UI | React 19.2.4, hand-rolled inline `<style>` token blocks | We deliberately do NOT use Tailwind or a UI library — the design system in `client/design.md` is opinionated enough that a generic kit would dilute it. |
+| Client error surface | `Toast` (custom) + `apiFetch` wrapper | Top-right stack, design-system compliant (whistle accent, corner ticks, Saira eyebrow, mono countdown). `apiFetch` adds `credentials: "include"` and throws typed `ApiError`; `toastFromApiError` decodes status → toast. |
 | Concurrency | In-memory promise chain mutex per matchId (`store.withLock`) | Models Durable Objects' single-threaded-per-ID semantics. |
-| Persistence | None today — the `Map` in `store.ts` is the world. | When we move to DO, `Map` becomes DO storage; everything else stays. |
+| Persistence | None today — the `Map` in `store.ts` is the world. Rate-limit + session bindings also in-process. | When we move to DO, `Map` becomes DO storage and rate-limit swaps to KV; everything else stays. |
 
 ---
 
@@ -50,22 +55,40 @@ bestsquad/
 ├── server/
 │   ├── players.json                     ← 300-player pool (30 GK / 90 DEF / 90 MID / 90 ATT)
 │   ├── src/
-│   │   ├── index.ts                     ← Hono bootstrap + CORS
+│   │   ├── index.ts                     ← Hono bootstrap + CORS (credentials:true for cookie)
 │   │   ├── config.ts                    ← single source of truth for tunables + FORMATIONS map
 │   │   ├── types.ts                     ← domain types + wire DTOs
 │   │   ├── store.ts                     ← Map<matchId, AuctionMatch> + withLock mutex
 │   │   ├── routes/
 │   │   │   ├── health.ts
 │   │   │   ├── auctionroom.ts
-│   │   │   └── match.ts                 ← all 7 match endpoints
+│   │   │   └── match.ts                 ← all 7 match endpoints (middleware stack per route — see §5.7)
+│   │   ├── middleware/
+│   │   │   ├── rateLimit.ts             ← 7 tiered limiters + dev/test bypass; default MemoryStore
+│   │   │   └── session.ts               ← issueSession() + requireSession() — sw_session cookie binding
+│   │   ├── schemas/
+│   │   │   ├── match.ts                 ← Zod input schemas for the 6 POST routes
+│   │   │   └── llm.ts                   ← Zod schemas for LLM JSON output (caps / squad / prose)
 │   │   ├── match/
-│   │   │   ├── AuctionMatch.ts          ← the class — one instance per match
+│   │   │   ├── AuctionMatch.ts          ← the class — one instance per match (readonly sessionToken)
 │   │   │   ├── playerPool.ts            ← module-scope 300-player pool + buildQueue(formation)
 │   │   │   └── ai.ts                    ← computeAiBidAmount + computeHeuristicCap (fallback when LLM fails)
 │   │   ├── llm/
-│   │   │   └── deepseek.ts              ← system prompt + planCaps + validatePlan (all server-side floors)
+│   │   │   ├── deepseek.ts              ← system prompt + planCaps + validatePlan (all server-side floors)
+│   │   │   └── squadBuilder.ts          ← planAiSquad + writeVerdictProse (result-phase LLMs)
 │   │   └── scratch/                     ← node-runnable diagnostic scripts (npx tsx src/scratch/*.ts)
+│   ├── scripts/
+│   │   ├── test-routes.sh               ← 30-case end-to-end smoke (boots dev, walks every route)
+│   │   └── test-schemas.ts              ← 29-case synthetic unit tests for LLM schemas
 │   └── tsconfig.json
+├── client/
+│   └── app/
+│       ├── layout.tsx                   ← mounts <ToastProvider> at root
+│       ├── _components/
+│       │   ├── ViewportGate.tsx
+│       │   └── Toast.tsx                ← design-system toast (top-right stack, sw-tick-in entrance)
+│       └── _lib/
+│           └── apiClient.ts             ← apiFetch + ApiError + toastFromApiError
 ├── playthrough.mjs / playthrough-v2.log  ← manual end-to-end scripts (legacy)
 └── README.md
 ```
@@ -191,15 +214,16 @@ One instance per matchId. Discipline:
 
 | Method | Path | Purpose | Returns |
 |---|---|---|---|
-| POST | `/api/match` | Create match. Validates formation against `FORMATIONS` enum. Blocks on `seedForwardPlan()` (LLM call) so lot 1 opens with a real cap. | `{ matchId, formation, status, lotsTotal, llmSeeded }` |
+| POST | `/api/match` | Create match. Validates formation against `FORMATIONS` enum. Blocks on `seedForwardPlan()` (LLM call) so lot 1 opens with a real cap. Issues `Set-Cookie: sw_session=...`. | `{ matchId, formation, status, lotsTotal, llmSeeded }` |
 | GET | `/api/match/:id/state` | Read-only snapshot. | `MatchStateDTO` |
 | POST | `/api/match/:id/start` | Open lot 1 (called once on auction mount). | `MatchStateDTO` |
-| POST | `/api/match/:id/bid` | User bid. Body validated to **positive integer** in raw euros. | `MatchStateDTO` |
+| POST | `/api/match/:id/bid` | User bid. Body validated to **positive integer** in raw euros via `BidSchema`. | `MatchStateDTO` |
 | POST | `/api/match/:id/ai-fire` | Client's setTimeout-fired AI bid trigger. Idempotent against stale planIds. | `MatchStateDTO` |
 | POST | `/api/match/:id/lot-end` | Resolve current lot + advance. 425 (Too Early) if before `expiresAt - 1s`. | `MatchStateDTO & { lotResult }` |
-| GET | `/api/match/:id/debug` | **Test only.** Exposes AI's full bought list (normally hidden during the auction per spec §4). Gated by `DEBUG_KEY` env header in production; in dev it's open. | full debug dump |
+| POST | `/api/match/:id/result` | Submit user XI + bench. Synchronous compute + LLM verdict prose. Idempotent once `status === "result"`. | `MatchStateDTO` (with cached `result` payload) |
+| GET | `/api/match/:id/debug` | **Test only.** Exposes AI's full bought list (normally hidden during the auction per spec §4). Gated by `DEBUG_KEY` env header in production; in dev it's open. Deliberately skips session check (diagnostic use). | full debug dump |
 
-Every handler follows the same discipline: `validate input → withLock → look up match → call ONE method → return DTO`.
+Every handler follows the same discipline: `rate-limit → requireSession → zValidator(schema) → withLock → look up match → call ONE method → return DTO`. The first three are middleware (see §5.7); the rest is the handler body.
 
 ### 5.3 Per-match concurrency (`store.ts`)
 
@@ -257,6 +281,45 @@ The server has **zero background timers for the auction loop.** Every state tran
 **Cleanup is declarative, not imperative.** The `useEffect` at `AuctionRoom.tsx:378-387` has `state?.lotState?.aiPlan?.planId` in its dep array and returns `() => clearTimeout(t)`. When the user bids, the server cancels the old plan and issues a new planId in the response. React sees the dep change, runs the old effect's cleanup (killing the stale timer), and runs the body again with the new planId. **No explicit `clearTimeout` call is wired to the bid action** — the planId rotation drives the cleanup through React. The countdown ticker uses the same pattern (`expiresAt` is in its dep array).
 
 **Anti-snipe is server-side.** When a bid lands inside `ANTI_SNIPE_TRIGGER_MS` (5s) of expiry, `extendTimerIfLate` mutates `lot.expiresAt += ANTI_SNIPE_MS` (7s). The client never extends anything — it just renders against the new `expiresAt` on the next 200ms tick, and the countdown visibly jumps up. The constant `7000` does not appear anywhere in client code. The same `useEffect` cleanup pattern handles the new `expiresAt` value.
+
+### 5.7 Middleware stack (rate limit + session + Zod)
+
+Every `/api/match/*` route runs the same per-request pipeline, ordered cheapest reject first:
+
+```
+Request
+  → globalLimiter      (matchRoutes.use("*"))   300/min/IP catch-all
+  → loggingMiddleware  (matchRoutes.use("*"))   [HTTP] log line
+  → <routeLimiter>     (per-route, see table below)
+  → requireSession     (per-route — except /api/match create and /debug)
+  → zValidator(schema) (per-route, see Zod schemas below)
+  → handler
+  → Response
+```
+
+If any middleware returns a `Response` without calling `next()`, the chain short-circuits and nothing further runs. So a 429 never wastes CPU on auth or body parsing; a 403 never wastes CPU on Zod.
+
+**Rate limit tiers (per IP).** Library: `hono-rate-limiter` with the default `MemoryStore` (no Redis — user opted out). All limiters share the same `getClientIp` keyGenerator: `cf-connecting-ip` → `x-forwarded-for` (first hop) → `x-real-ip` → `"local-dev"` fallback.
+
+| Route | Window | Limit | Why |
+|---|---|---|---|
+| `POST /api/match` | **2 min (dev) / 2 h (prod)** | 4 | LLM seed call (~$0.01–0.05). Bump `CREATE_MATCH_WINDOW_MS = TWO_MIN` → `TWO_HOURS` pre-launch. |
+| `POST /:id/result` | 10 min | 10 | 2 LLM calls per submission (squad pick + verdict prose). |
+| `POST /:id/lot-end` | 1 min | 60 | Kicks off async cap-planning LLM. |
+| `POST /:id/bid` | 1 min | 120 | No LLM, anti-mash-spam. |
+| `POST /:id/ai-fire` | 1 min | 60 | No LLM, defensive. |
+| `POST /:id/start` | 1 min | 20 | Cheap, defensive. |
+| `*` global | 1 min | 300 | Catch-all safety net. |
+
+**429 contract.** Body: `{ error: "rate_limit", scope, message, retryAfterMs }`. Header: `Retry-After: <seconds>`. Client decodes both — the toast uses `retryAfterMs` to show a JetBrains-Mono countdown that ticks down to zero.
+
+**Dev/test bypass.** `shouldSkipForLocalDev(c)` returns true when `NODE_ENV !== "production"` AND `RATE_LIMIT_FORCE !== "1"` AND no CDN header is present. So `npm run dev` never trips itself; `RATE_LIMIT_FORCE=1 npm run dev` exercises real 429 paths (used by `scripts/test-routes.sh`); production behind Cloudflare gets full limits.
+
+**How `MemoryStore` works.** Two `Map<ip, { totalHits, resetTime }>`s — `current` and `previous`. Every `windowMs` a `setInterval` does `previous = current; current = new Map()` — O(1) bulk eviction of stale IPs. On each request: increment the counter; new entries born in `current` with `resetTime = now + windowMs`; entries that pop in from `previous` get recycled (counter reset, fresh window). Cost: ~150 bytes/IP × 7 limiters = ~1KB/active IP. At 10k unique IPs in a window that's ~10MB of heap. Restart wipes the lot.
+
+**Session binding.** `AuctionMatch` has `readonly sessionToken = nanoid(32)` (~192 bits, never in any DTO — verified by `toClientDTO` being field-explicit). `POST /api/match` issues `Set-Cookie: sw_session=<token>; HttpOnly; SameSite=Lax (dev) / None (prod); Secure (prod); Max-Age=86400; Path=/`. `requireSession` middleware reads the cookie on every `/api/match/:id/*` request, looks up the match outside `withLock` (safe — `sessionToken` is immutable), and 403s on mismatch (or 404 if the match is gone). Stops URL-sharing across browsers; does NOT stop two tabs in the same browser (same cookie jar) — that's UX confusion handled by `withLock` + stale-lotIndex 409.
+
+**Zod schemas.** `server/src/schemas/match.ts` exports the 5 input schemas (`CreateMatchSchema`, `BidSchema`, `AiFireSchema`, `LotEndSchema`, `ResultSchema`). Failure returns 400 with `{ success: false, error: ZodError }` body. `server/src/schemas/llm.ts` exports the 3 LLM-output schemas; both `validatePlan` and `validateSquadJson` use **per-row `safeParse`** so one malformed entry drops only that row (heuristic / greedy fallback covers it), preserving pre-Zod behavior. The 7 cap floors in `validatePlan` and the wrong-position repair in `validateSquadJson` are unchanged — they run AFTER Zod has guaranteed the shape.
 
 **Timer vulnerability assessment:**
 
@@ -396,6 +459,10 @@ These are the **hard rules** the system enforces. Violating any of them is a bug
 
 | Invariant | Where enforced | Why |
 |---|---|---|
+| **matchId is bound to a session cookie.** | `requireSession` middleware compares `sw_session` cookie against `AuctionMatch.sessionToken`. 403 on mismatch (or no cookie). | Closes the matchId-as-bearer-token risk. URL leaked to a different browser → no cookie → 403. |
+| **`sessionToken` never reaches the client.** | `readonly` field on `AuctionMatch`, generated via `nanoid(32)` in the constructor. `toClientDTO` is field-explicit (no spread), so the token cannot leak via DTO. | A leaked session token would let an attacker forge cookies for that match. |
+| **All POST bodies validated at the boundary.** | `zValidator("json", Schema)` middleware in front of every mutating route. Hand-rolled type guards have been removed. | One canonical shape per route; failures 400 with a structured error body before any handler logic runs. |
+| **LLM JSON outputs Zod-parsed before semantic checks.** | `validatePlan`, `validateSquadJson`, `writeVerdictProse` all run `safeParse` per row; structural failures drop the row, semantic floors run on the typed data. | Heuristic / greedy fallback covers single bad rows without breaking the batch. |
 | AI's per-lot cap never reaches the client. | `LotStateDTO` omits `cap`. `MatchStateDTO` builds via `toClientLotDTO()` which returns an explicit literal — no spread of `LotState`. | A leaked cap lets the user bid `cap - €1M` and steal every elite. |
 | AI's bought roster hidden during the auction. | `MatchStateDTO.ai = { budget, boughtCount }` — names + categories never sent until `status === "complete"`. | Spec §4. Prevents user reading AI strategy mid-match. |
 | Queue composition hidden during the auction. | AuctionRoom never references `state.queue` or per-category counts; only `lotsTotal` (a total). | The chalkboard `/setup` page is the **only** place per-category counts are shown — the info-icon popover spells this out. |
@@ -404,6 +471,7 @@ These are the **hard rules** the system enforces. Violating any of them is a bug
 | AI bid amount recomputed at fire time, never trusted from the client. | `aiFire(planId)` calls `computeAiBidAmount(currentBid, cap)` fresh — the client only sends a `planId`. | Defeats client-side amount spoofing. |
 | Reconciliation shot at lot-end. | `endLot()` — if `highBidder !== "ai"` and `cap` still allows a bid, AI fires one guaranteed bid at `expiresAt - 1`. | Defeats clients that drop or delay `/ai-fire` to block the AI. |
 | /debug gated in production. | `process.env.DEBUG_KEY` required as `X-Debug-Key` header. If unset and `NODE_ENV === "production"`, the endpoint 404s. | Spec §4 — debug endpoint reveals AI roster, must not be public. |
+| Per-IP rate caps on every expensive call. | 7 `hono-rate-limiter` instances stacked per route. 429 carries `Retry-After` + `retryAfterMs`. | Bounds the DeepSeek bill if an attacker spams the LLM-fronted routes. |
 
 The cap-leak invariant has been **runtime-verified** end-to-end — `/state` response for a freshly opened lot returns exactly these 7 keys: `aiPlan, bidLog, currentBid, expiresAt, highBidder, lotIndex, player`. No `cap`, no `startedAt`, no `pendingAiPlan`.
 
@@ -455,7 +523,31 @@ Motion vocabulary is exactly 3 keyframes: `sw-flap-down` (digit flip), `sw-tick-
 
 Full spec: [`client/design.md`](../client/design.md).
 
-### 8.5 Formation propagation through the client
+### 8.5 Error surface — Toast + `apiFetch`
+
+Every cross-origin call from the client goes through `client/app/_lib/apiClient.ts → apiFetch<T>(url, init)`. Two responsibilities:
+
+1. **Sets `credentials: "include"`** so the `sw_session` cookie roundtrips on every request (required for the binding to work; pairs with `credentials: true` in the server CORS config).
+2. **Throws a typed `ApiError`** on non-2xx, carrying both the HTTP status and the parsed JSON body. Network errors are synthesized as `ApiError(0, { error: "network" })` so callers can branch on it the same way.
+
+`toastFromApiError(err, push)` decodes the error into a single toast and pushes it via the `useToast()` hook. Routing:
+
+| Status | Toast kind | Scope eyebrow | Notes |
+|---|---|---|---|
+| 429 | rate-limit | server-provided (e.g. `RATE LIMIT`) | Body's `retryAfterMs` drives a JetBrains Mono countdown that ticks to zero. |
+| 403 `session_mismatch` | session | `SESSION` | Cookie missing or wrong. |
+| 404 | error | `NOT FOUND` | Match gone or never existed. |
+| 409 | info | `OUT OF SYNC` | Stale `lotIndex` — client refreshes from response state. |
+| 425 | info | `TOO EARLY` | Lot-end before tolerance. |
+| ≥500 | error | `SERVER` | "Server hiccup, try again." |
+| 0 (network) | error | `NETWORK` | DNS/offline/preflight failure. |
+| 400 (Zod / business) | error | (default `ERROR`) | Message from Zod issue tree or `userBid`-style rejection. |
+
+**`Toast.tsx` is design-system compliant.** Top-right stack, max 3, FIFO eviction; corner ticks per `.sw-card` convention; Saira Condensed eyebrow (whistle for errors, muted for info); Inter body; JetBrains Mono countdown; `sw-toast-in` entrance (the `sw-tick-in` keyframe cloned to the component's local CSS); `sw-toast-pulse` ambient dot. 4s auto-dismiss + manual close button. Rate-limit toasts hold for `clamp(retryAfterMs, 4s, 10s)` so the countdown is readable but doesn't dominate the screen. Mounted at the root via `<ToastProvider>` in `app/layout.tsx`.
+
+**Where it surfaces.** In `AuctionRoom.tsx`, the `api()` helper toasts critical statuses (429 / 403 / 404 / ≥500 / network) automatically. Routine 400/409/425 stay inline next to the bid console (`bidError` is still wired — local context is more useful than a corner toast for a "raise your bid" message). In `setup/page.tsx`, the create-match failure pushes a toast AND keeps the inline error near the commit button.
+
+### 8.6 Formation propagation through the client
 
 The client mirrors the server's per-formation data in two places:
 
@@ -507,8 +599,8 @@ The complete failure ledger lives in the **prompt itself** — each principle in
 | Cloudflare DO migration | Not started | `store.ts` and `index.ts` are the only files that change. Match logic is portable. |
 | Chemistry as a scoring multiplier | Mentioned in prompt as a tiebreaker, **not actually computed** anywhere in scoring. | Visual chemistry card in AuctionRoom is illustrative, not authoritative. |
 | Match Result / Squad Builder page | Not built. The `CompleteView` shows a basic dump. | The signature element planned: a full-time scoreboard with two side-by-side squad columns flipping in player by player. |
-| Persistence | None — server restart loses every match. | DO storage when we migrate. |
-| Auth | None. The 10-char nanoid matchId IS the bearer token — anyone who learns it can POST `/result` on that player's behalf. Leaks via referer, history, screenshots, OG previews. | Issue a `Set-Cookie: HttpOnly; Secure; SameSite=Lax` on match-create, require it on every mutating route. Half a day's work; closes ~95% of the surface. |
+| Persistence | None — server restart loses every match, every rate-limit counter, every session binding. | DO storage when we migrate (matches + sessions); `UnstorageStore` with Cloudflare KV for rate-limit. Same migration window. |
+| ~~Auth~~ ✅ Closed | `sw_session` HttpOnly cookie issued on match-create, required by `requireSession` middleware on every `/:id/*` route. Stops URL-sharing across browsers. Same-browser two-tab still works (shared cookie jar) — UX confusion only, no security risk. | Done. See §5.7 + §7. |
 | Match history / replay | Not stored. | The console log is the only record. |
 | Mobile layout | Auction room and chalkboard collapse to single-column < 1180px / 1080px, but not deeply optimised. | Test before mobile launch. |
 | Server-side lot-end timer | Not implemented. Lot advancement depends entirely on the client posting `/lot-end`. A user whose system clock is more than 1s ahead of the server sees the countdown hit 0:00, gets a 425 Too Early back, and the client's `endedLotsRef` Set prevents retry — lot frozen forever. Also: a closed browser tab leaves the match instance in memory indefinitely. | Move trigger to `setTimeout(LOT_DURATION_MS + slack)` inside `startLot` (and `state.storage.setAlarm` under DO). Closes the clock-skew UX bug AND the abandoned-match memory non-attack AND pre-shapes the DO migration. |
@@ -533,8 +625,8 @@ A design and security pass across the auction subsystem. Strengths first, then c
 
 ### Concerns (in priority)
 
-**1. No authentication. matchId is the bearer token.**
-There is no session, no signed cookie, no auth header on any of `/bid`, `/lot-end`, `/result`, `/ai-fire`. Anyone who learns a matchId can POST `/result` for that player and freeze their squad with an arbitrary XI. The only mitigation today is `MATCH_ID_LENGTH = 10`-character nanoid unguessability (~58 bits). Fine against random guessing, but matchIds leak through browser history, referer headers, screenshots, OG image previews, and analytics. **Fix:** issue a `Set-Cookie: HttpOnly; Secure; SameSite=Lax` on match-create, require it on every mutating route. Closes ~95% of this surface in half a day.
+**1. ~~No authentication. matchId is the bearer token.~~ ✅ CLOSED.**
+Match-create now issues `Set-Cookie: sw_session=<nanoid(32)>; HttpOnly; SameSite=Lax (dev) / None (prod); Secure (prod); Max-Age=86400`. `requireSession` middleware compares the cookie against the readonly `AuctionMatch.sessionToken` on every `/:id/*` request and 403s on mismatch. URL pasted into another browser → no cookie → 403. ~192 bits of session entropy on top of the ~58-bit matchId. Same-browser two-tab still plays both — UX confusion (stale-lotIndex 409s) but no security hole. See §5.7 and §7.
 
 **2. Client-driven lot-end + 1s tolerance leaves a clock-skew UX bug.**
 A legitimate user whose system clock is 2+s ahead of the server will see the countdown reach 0:00 early, POST `/lot-end`, get 425 Too Early, and have no retry because `endedLotsRef.current.has(lotIndex)` is already set. The lot freezes at 0:00 forever short of a reload. **Fix:** move the lot-end trigger to a server-side `setTimeout(LOT_DURATION_MS + slack)` in `startLot`. Same fix closes the abandoned-match memory non-attack and pre-shapes the DO migration. Half a day.
@@ -569,17 +661,27 @@ A Node restart loses every in-flight match. A user who walks away keeps a match 
 | Cap leakage to client | yes | `toClientLotDTO` returns explicit literal. Scenario D in `simulate.ts` enforces it. |
 | Per-matchId race conditions | yes | `withLock` mutex serializes. |
 | `/ai-fire` "fire early" (before delayMs) | n/a | Allowed by server but no-op or self-harm. Not exploitable. |
-| matchId as bearer token | **no** | No auth. Concern #1. |
-| Clock-skew UX bug | **no** | Concern #2. |
-| Server restart loses match state | **no** | No persistence. Concern #5. |
+| matchId as bearer token | yes | `sw_session` HttpOnly cookie binding. Concern #1 closed. |
+| Cross-browser URL replay | yes | Same — no cookie → 403. |
+| Same-browser two-tab race | partial | Both tabs share the cookie and play; `withLock` serializes bids, second tab gets stale-lotIndex 409. UX confusion, not a security hole. |
+| Body type / shape spoofing | yes | Zod schemas on every POST (`@hono/zod-validator`). 400 with issue tree. |
+| LLM-emitted bad row crashes the batch | yes | Per-row `safeParse` drops the bad row only; heuristic / greedy fallback fills the gap. |
+| Spam `POST /api/match` to burn LLM tokens | yes | `createMatchLimiter` — 4 per 2 min (dev) / 2 h (prod). 429 with `Retry-After`. |
+| Mash-bid DoS | yes | `bidLimiter` — 120 per minute, plus the global 300/min catch-all. |
+| Clock-skew UX bug | **no** | Concern #2. Still open. |
+| Server restart loses match state | **no** | No persistence. Concern #5. Restart also resets rate-limit + session bindings. |
 
 ### Recommended action — pre-launch
 
-In priority order:
+In priority order (✅ = landed since the original audit):
 
 1. **Verify `MATCH_ID_LENGTH = 10` and `LOT_END_TOLERANCE_MS = 1000` are still the values you want.** Both are single-character config changes with security/UX consequences. Five-minute audit.
 2. **Move lot-end trigger to a server-side timer.** Half a day. Closes the clock-skew bug AND the abandoned-match memory non-attack AND pre-shapes DO migration.
-3. **Add a match-create `Set-Cookie` and require it on mutating routes.** Three hours. Closes the bearer-token risk.
+3. ✅ **Match-create `Set-Cookie` + `requireSession` on mutating routes.** Done. See §5.7 + §7.
+4. ✅ **Zod schemas on every POST body.** Done. `server/src/schemas/match.ts` + `@hono/zod-validator` middleware.
+5. ✅ **Zod schemas on LLM JSON outputs.** Done. `server/src/schemas/llm.ts` + per-row `safeParse` in `validatePlan` / `validateSquadJson` / verdict prose.
+6. ✅ **IP rate limits on every expensive route.** Done. `hono-rate-limiter` × 7 tiers. See §5.7.
+7. **Flip `CREATE_MATCH_WINDOW_MS = TWO_MIN` → `TWO_HOURS`** before going public. One-line edit in `server/src/middleware/rateLimit.ts`; the dev value is loud-commented so it can't be missed.
 
 Everything else is post-launch.
 

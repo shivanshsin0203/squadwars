@@ -2,11 +2,16 @@
  * /api/match routes — thin wrappers around AuctionMatch methods.
  *
  * Discipline (per DO-emulation rules):
- *   - Each handler: validate input → withLock → look up match → call ONE method → return DTO.
+ *   - Each handler: zValidator parses body → withLock → look up match → call ONE method → return DTO.
  *   - Handlers never touch match fields directly.
  *   - All mutations are inside withLock so concurrent requests for the same matchId serialize.
  *   - We return MatchStateDTO (toClientDTO) for any state-changing endpoint so the client
  *     always gets a fresh snapshot without a separate /state round-trip.
+ *
+ * Input validation: every POST body is parsed via @hono/zod-validator using the
+ * schemas in server/src/schemas/match.ts. Shape failures return 400 with the
+ * Zod issue tree. Business-rule failures (stale lotIndex, no active lot,
+ * insufficient budget) stay inline in the handler and return their own codes.
  *
  * Endpoints:
  *   POST   /api/match                 → create match (no lot opened yet)
@@ -15,24 +20,43 @@
  *   POST   /api/match/:id/bid         → user bid
  *   POST   /api/match/:id/ai-fire     → frontend's setTimeout-triggered AI bid
  *   POST   /api/match/:id/lot-end     → close current lot, resolve, advance
+ *   POST   /api/match/:id/result      → submit user XI + bench, get verdict
  */
 
 import { Hono } from "hono";
-import type { Context } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { nanoid } from "nanoid";
 import { AuctionMatch } from "../match/AuctionMatch.js";
 import { getMatch, putMatch, withLock } from "../store.js";
 import {
   MATCH_ID_LENGTH,
   DEFAULT_FORMATION,
-  FORMATION_NAMES,
-  isValidFormation,
   DEFAULT_DIFFICULTY,
-  DIFFICULTY_NAMES,
-  isValidDifficulty,
 } from "../config.js";
+import {
+  CreateMatchSchema,
+  BidSchema,
+  AiFireSchema,
+  LotEndSchema,
+  ResultSchema,
+} from "../schemas/match.js";
+import {
+  globalLimiter,
+  createMatchLimiter,
+  startLimiter,
+  bidLimiter,
+  aiFireLimiter,
+  lotEndLimiter,
+  resultLimiter,
+} from "../middleware/rateLimit.js";
+import { requireSession, issueSession } from "../middleware/session.js";
 
 export const matchRoutes = new Hono();
+
+// ─────────────────────────── global rate limit (300/min/IP) ───────────────────────────
+// Catch-all safety net so no single IP can DoS /api/match/* via any path.
+// Per-route limiters below stack on top with tighter windows for expensive calls.
+matchRoutes.use("*", globalLimiter);
 
 // ─────────────────────────── request/response logging ───────────────────────────
 
@@ -53,83 +77,45 @@ matchRoutes.use("*", async (c, next) => {
   console.log(`← [HTTP] ${c.req.method} ${c.req.path} status=${c.res.status} (${ms}ms)`);
 });
 
-// ─────────────────────────── helpers ───────────────────────────
-
-async function safeJson(c: Context): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return null;
-  }
-}
-
-function isNonNegativeInt(v: unknown): v is number {
-  return typeof v === "number" && Number.isInteger(v) && v >= 0;
-}
-/** Bid amounts MUST be positive integers in raw euros — fractional euros are rejected. */
-function isPositiveInt(v: unknown): v is number {
-  return typeof v === "number" && Number.isInteger(v) && v > 0;
-}
-
 // ─────────────────────────── POST /api/match ───────────────────────────
 
-matchRoutes.post("/", async (c) => {
-  const body = (await safeJson(c)) as
-    | { formation?: unknown; difficulty?: unknown }
-    | null;
-  const rawF =
-    body && typeof body.formation === "string" && body.formation.trim()
-      ? body.formation.trim()
-      : DEFAULT_FORMATION;
+matchRoutes.post(
+  "/",
+  createMatchLimiter,
+  zValidator("json", CreateMatchSchema),
+  async (c) => {
+    const { formation: rawF, difficulty: rawD } = c.req.valid("json");
+    const formation = rawF ?? DEFAULT_FORMATION;
+    const difficulty = rawD ?? DEFAULT_DIFFICULTY;
 
-  if (!isValidFormation(rawF)) {
-    return c.json(
-      {
-        error: `unknown formation "${rawF}"`,
-        allowed: FORMATION_NAMES,
-      },
-      400
-    );
+    const matchId = nanoid(MATCH_ID_LENGTH);
+    const match = new AuctionMatch({ matchId, formation, difficulty });
+    putMatch(match);
+
+    // Bind the freshly-created match to this browser via HttpOnly cookie.
+    // All subsequent /api/match/:id/* requests will be checked against
+    // match.sessionToken by requireSession middleware.
+    issueSession(c, match.sessionToken);
+
+    // Block on LLM seed so lot 1 opens with a real cap, not heuristic.
+    // If LLM is misconfigured or fails, seedForwardPlan logs and returns — heuristic covers.
+    await match.seedForwardPlan();
+
+    return c.json({
+      matchId,
+      formation,
+      difficulty,
+      status: match.status,
+      lotsTotal: match.queue.length,
+      llmSeeded: match.forwardPlan.size > 0,
+    });
   }
-  const formation = rawF;
-
-  const rawD =
-    body && typeof body.difficulty === "string" && body.difficulty.trim()
-      ? body.difficulty.trim()
-      : DEFAULT_DIFFICULTY;
-  if (!isValidDifficulty(rawD)) {
-    return c.json(
-      {
-        error: `unknown difficulty "${rawD}"`,
-        allowed: DIFFICULTY_NAMES,
-      },
-      400
-    );
-  }
-  const difficulty = rawD;
-
-  const matchId = nanoid(MATCH_ID_LENGTH);
-  const match = new AuctionMatch({ matchId, formation, difficulty });
-  putMatch(match);
-
-  // Block on LLM seed so lot 1 opens with a real cap, not heuristic.
-  // If LLM is misconfigured or fails, seedForwardPlan logs and returns — heuristic covers.
-  await match.seedForwardPlan();
-
-  return c.json({
-    matchId,
-    formation,
-    difficulty,
-    status: match.status,
-    lotsTotal: match.queue.length,
-    llmSeeded: match.forwardPlan.size > 0,
-  });
-});
+);
 
 // ─────────────────────────── GET /api/match/:id/state ───────────────────────────
 
-matchRoutes.get("/:id/state", async (c) => {
-  const id = c.req.param("id");
+matchRoutes.get("/:id/state", requireSession, async (c) => {
+  const id = c.req.param("id")!;
   return withLock(id, () => {
     const m = getMatch(id);
     if (!m) return c.json({ error: "match not found" }, 404);
@@ -139,8 +125,8 @@ matchRoutes.get("/:id/state", async (c) => {
 
 // ─────────────────────────── POST /api/match/:id/start ───────────────────────────
 
-matchRoutes.post("/:id/start", async (c) => {
-  const id = c.req.param("id");
+matchRoutes.post("/:id/start", startLimiter, requireSession, async (c) => {
+  const id = c.req.param("id")!;
   return withLock(id, () => {
     const m = getMatch(id);
     if (!m) return c.json({ error: "match not found" }, 404);
@@ -154,18 +140,14 @@ matchRoutes.post("/:id/start", async (c) => {
 
 // ─────────────────────────── POST /api/match/:id/bid ───────────────────────────
 
-matchRoutes.post("/:id/bid", async (c) => {
-  const id = c.req.param("id");
-  const body = (await safeJson(c)) as { lotIndex?: unknown; amount?: unknown } | null;
-
-  if (!body || !isNonNegativeInt(body.lotIndex) || !isPositiveInt(body.amount)) {
-    return c.json(
-      { error: "body must be { lotIndex: int, amount: positive integer in raw euros }" },
-      400
-    );
-  }
-  const lotIndex = body.lotIndex;
-  const amount = body.amount;
+matchRoutes.post(
+  "/:id/bid",
+  bidLimiter,
+  requireSession,
+  zValidator("json", BidSchema),
+  async (c) => {
+  const id = c.req.param("id")!;
+  const { lotIndex, amount } = c.req.valid("json");
 
   return withLock(id, () => {
     const m = getMatch(id);
@@ -189,24 +171,14 @@ matchRoutes.post("/:id/bid", async (c) => {
 
 // ─────────────────────────── POST /api/match/:id/ai-fire ───────────────────────────
 
-matchRoutes.post("/:id/ai-fire", async (c) => {
-  const id = c.req.param("id");
-  const body = (await safeJson(c)) as
-    | { lotIndex?: unknown; planId?: unknown }
-    | null;
-
-  if (
-    !body ||
-    !isNonNegativeInt(body.lotIndex) ||
-    typeof body.planId !== "string"
-  ) {
-    return c.json(
-      { error: "body must be { lotIndex: int, planId: string }" },
-      400
-    );
-  }
-  const lotIndex = body.lotIndex;
-  const planId = body.planId;
+matchRoutes.post(
+  "/:id/ai-fire",
+  aiFireLimiter,
+  requireSession,
+  zValidator("json", AiFireSchema),
+  async (c) => {
+  const id = c.req.param("id")!;
+  const { lotIndex, planId } = c.req.valid("json");
 
   return withLock(id, () => {
     const m = getMatch(id);
@@ -229,7 +201,7 @@ matchRoutes.post("/:id/ai-fire", async (c) => {
 // the endpoint is fully disabled in any non-dev environment.
 
 matchRoutes.get("/:id/debug", async (c) => {
-  const id = c.req.param("id");
+  const id = c.req.param("id")!;
 
   const configured = process.env.DEBUG_KEY?.trim();
   const isDev =
@@ -280,25 +252,14 @@ matchRoutes.get("/:id/debug", async (c) => {
 // DTO returned contains the full result payload (both squads + verdict).
 // Idempotent: once status === "result", repeated calls return the cached payload.
 
-matchRoutes.post("/:id/result", async (c) => {
-  const id = c.req.param("id");
-  const body = (await safeJson(c)) as
-    | { xi?: unknown; bench?: unknown }
-    | null;
-
-  if (
-    !body ||
-    !Array.isArray(body.xi) ||
-    !Array.isArray(body.bench)
-  ) {
-    return c.json(
-      { error: "body must be { xi: [{slotId, playerId}], bench: [{index, playerId}] }" },
-      400
-    );
-  }
-  // Shallow normalisation; deep validation lives in submitUserResult.
-  const xi = body.xi as Array<{ slotId: string; playerId: number }>;
-  const bench = body.bench as Array<{ index: number; playerId: number }>;
+matchRoutes.post(
+  "/:id/result",
+  resultLimiter,
+  requireSession,
+  zValidator("json", ResultSchema),
+  async (c) => {
+  const id = c.req.param("id")!;
+  const { xi, bench } = c.req.valid("json");
 
   return withLock(id, async () => {
     const m = getMatch(id);
@@ -311,14 +272,14 @@ matchRoutes.post("/:id/result", async (c) => {
 
 // ─────────────────────────── POST /api/match/:id/lot-end ───────────────────────────
 
-matchRoutes.post("/:id/lot-end", async (c) => {
-  const id = c.req.param("id");
-  const body = (await safeJson(c)) as { lotIndex?: unknown } | null;
-
-  if (!body || !isNonNegativeInt(body.lotIndex)) {
-    return c.json({ error: "body must be { lotIndex: int }" }, 400);
-  }
-  const lotIndex = body.lotIndex;
+matchRoutes.post(
+  "/:id/lot-end",
+  lotEndLimiter,
+  requireSession,
+  zValidator("json", LotEndSchema),
+  async (c) => {
+  const id = c.req.param("id")!;
+  const { lotIndex } = c.req.valid("json");
 
   return withLock(id, () => {
     const m = getMatch(id);

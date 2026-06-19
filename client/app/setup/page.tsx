@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ViewportGate from "../_components/ViewportGate";
+import { useToast } from "../_components/Toast";
+import { apiFetch, ApiError, toastFromApiError } from "../_lib/apiClient";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -1220,6 +1222,7 @@ function DifficultyTile({
 
 export default function SetupPage() {
   const router = useRouter();
+  const { push } = useToast();
   const [selected, setSelected] = useState<string>(DEFAULT_FORMATION);
   const [difficulty, setDifficulty] = useState<DifficultyName>(DEFAULT_DIFFICULTY);
   const [health, setHealth] = useState<"loading" | "ok" | "bad">("loading");
@@ -1242,7 +1245,7 @@ export default function SetupPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_URL}/health`)
+    fetch(`${BACKEND_URL}/health`, { credentials: "include" })
       .then((r) => r.json())
       .then(() => { if (!cancelled) setHealth("ok"); })
       .catch(() => { if (!cancelled) setHealth("bad"); });
@@ -1258,16 +1261,10 @@ export default function SetupPage() {
     );
     const t0 = performance.now();
     try {
-      const res = await fetch(`${BACKEND_URL}/api/match`, {
+      const data = await apiFetch<CreateMatchResp>(`${BACKEND_URL}/api/match`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ formation: selected, difficulty }),
       });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`HTTP ${res.status} ${txt}`);
-      }
-      const data = (await res.json()) as CreateMatchResp;
       const ms = Math.round(performance.now() - t0);
       console.log(
         `[CLIENT:createMatch] ${ms}ms → matchId=${data.matchId} formation=${data.formation} ` +
@@ -1276,7 +1273,15 @@ export default function SetupPage() {
       router.push(`/auctionroom/${encodeURIComponent(data.matchId)}`);
     } catch (e) {
       console.error("[CLIENT:createMatch] FAILED", e);
-      setError(String(e));
+      // Toast surfaces the real reason (429 rate limit, Zod validation, 5xx,
+      // network). Keep the inline error visible too — it sits next to the
+      // commit button and tells the user the form didn't submit.
+      toastFromApiError(e, push);
+      const msg =
+        e instanceof ApiError
+          ? e.body.message ?? e.body.error ?? `Failed (${e.status})`
+          : String(e);
+      setError(msg);
       setBusy(false);
     }
   }

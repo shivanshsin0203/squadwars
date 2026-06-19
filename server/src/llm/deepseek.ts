@@ -22,6 +22,10 @@
 
 import OpenAI from "openai";
 import { HEURISTIC_CAP_BUDGET_FRACTION } from "../config.js";
+import {
+  CapPlanResponseSchema,
+  CapPlanEntrySchema,
+} from "../schemas/llm.js";
 
 // ─────────────────────────── client ───────────────────────────
 
@@ -484,19 +488,22 @@ export async function planCaps(
       `content=${content.substring(0, 300).replace(/\s+/g, " ")}${content.length > 300 ? "…" : ""}`
   );
 
-  let parsed: { plan?: unknown };
+  let rawParsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    rawParsed = JSON.parse(content);
   } catch {
     throw new Error(
       `LLM returned invalid JSON: ${content.substring(0, 200)}`
     );
   }
-  if (!parsed.plan || !Array.isArray(parsed.plan)) {
-    throw new Error("LLM response missing 'plan' array");
+  const outerParse = CapPlanResponseSchema.safeParse(rawParsed);
+  if (!outerParse.success) {
+    throw new Error(
+      `LLM response missing 'plan' array: ${outerParse.error.issues[0]?.message ?? "shape error"}`
+    );
   }
 
-  const caps = validatePlan(parsed.plan, req);
+  const caps = validatePlan(outerParse.data.plan, req);
   return {
     caps,
     usage: {
@@ -521,22 +528,19 @@ function validatePlan(
 
   for (let i = 0; i < req.toPlan.length; i++) {
     const expected = req.toPlan[i];
-    const entry = plan[i] as
-      | {
-          player_id?: unknown;
-          cap?: unknown;
-          reason?: unknown;
-          xi_status_quote?: unknown;
-          value_eur_seen?: unknown;
-        }
-      | undefined;
 
-    if (!entry || typeof entry !== "object") {
+    // Structural parse — Zod handles type, integer, non-negative cap checks.
+    // safeParse per entry: a single bad row drops only that row; the rest of
+    // the batch still benefits from LLM caps.
+    const parsedEntry = CapPlanEntrySchema.safeParse(plan[i]);
+    if (!parsedEntry.success) {
       console.log(
-        `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: MISSING entry → heuristic fallback`
+        `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
+          `MISSING/INVALID entry (${parsedEntry.error.issues[0]?.message ?? "shape error"}) → heuristic fallback`
       );
       continue;
     }
+    const entry = parsedEntry.data;
 
     if (entry.player_id !== expected.id) {
       console.log(
@@ -547,22 +551,10 @@ function validatePlan(
     }
 
     const rawCap = entry.cap;
-    if (
-      typeof rawCap !== "number" ||
-      !Number.isFinite(rawCap) ||
-      rawCap < 0 ||
-      !Number.isInteger(rawCap)
-    ) {
-      console.log(
-        `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
-          `invalid cap (${rawCap}) → heuristic fallback`
-      );
-      continue;
-    }
 
     // xi_status_quote check — soft (warn only, don't discard yet)
     const expectedQuote = req.aiSquad.xiStatus[expected.category];
-    const gotQuote = typeof entry.xi_status_quote === "string" ? entry.xi_status_quote : "";
+    const gotQuote = entry.xi_status_quote ?? "";
     const quoteOk = gotQuote.trim() === expectedQuote.trim();
     if (!quoteOk) {
       console.log(
@@ -573,7 +565,7 @@ function validatePlan(
 
     // value_eur_seen check — soft (warn only)
     const valueSeen = entry.value_eur_seen;
-    const valueOk = typeof valueSeen === "number" && valueSeen === expected.value_eur;
+    const valueOk = valueSeen === expected.value_eur;
     if (!valueOk) {
       console.log(
         `[LLM:validate] id=${req.matchId} idx=${i} ${expected.name}: ` +
@@ -765,8 +757,7 @@ function validatePlan(
 
     const clamped = Math.min(cap, maxAllowed);
     out.set(expected.id, clamped);
-    const reason =
-      typeof entry.reason === "string" ? entry.reason : "<no reason>";
+    const reason = entry.reason ?? "<no reason>";
     const skipNote = clamped === 0 ? " [SKIP]" : "";
     const clampNote =
       clamped !== cap

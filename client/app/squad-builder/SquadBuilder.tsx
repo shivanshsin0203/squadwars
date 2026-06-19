@@ -43,7 +43,7 @@
  *     bench bonus    = +1 per starter sharing club/country with any bench player (cap 4)
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { polyfill as polyfillTouchDnd } from "mobile-drag-drop";
 import { scrollBehaviourDragImageTranslateOverride } from "mobile-drag-drop/scroll-behaviour";
@@ -1851,6 +1851,15 @@ export default function SquadBuilder({
     setSelectedId(null);
   }, [initialPlacement]);
 
+  // Pre-rendered drag ghosts, keyed by player id. setDragImage() snapshots its
+  // target synchronously, so building the ghost (and its <img>) inside
+  // onDragStart loses the race against image fetch+decode — first drag shows
+  // an empty disc. Instead we mount one ghost per player up-front (hidden
+  // off-screen below), which gives the browser time to fetch and decode the
+  // photo normally. On drag start we just hand the already-decoded element to
+  // setDragImage().
+  const ghostRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
   // Touch-device drag support. The squad-builder uses native HTML5 drag-and-drop
   // (draggable + onDragStart/onDrop), which iPad Safari and Android Chrome do not
   // fire reliably from touch input. mobile-drag-drop synthesizes drag events from
@@ -1937,9 +1946,10 @@ export default function SquadBuilder({
   const handleDragStart = useCallback((bp: BoughtPlayer) => (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", String(bp.player.id));
     e.dataTransfer.effectAllowed = "move";
-    const ghost = makeDragImage(bp.player.name, bp.player.photo_path);
+    const prebuilt = ghostRefs.current[bp.player.id];
+    const ghost = prebuilt ?? makeDragImage(bp.player.name, bp.player.photo_path);
     e.dataTransfer.setDragImage(ghost, 20, 22);
-    requestAnimationFrame(() => ghost.remove());
+    if (!prebuilt) requestAnimationFrame(() => ghost.remove());
     setDraggingId(bp.player.id);
     setSelectedId(bp.player.id);
   }, []);
@@ -2216,6 +2226,61 @@ export default function SquadBuilder({
             slot={selectedSlot}
             fit={selectedFit}
           />
+        </div>
+
+        {/* Hidden drag-image ghosts — see ghostRefs above. Off-screen, so they
+            don't affect layout, but real DOM so the browser fetches+decodes the
+            photos before any drag begins. */}
+        <div aria-hidden style={{ position: "absolute", top: -2000, left: -2000, pointerEvents: "none" }}>
+          {bought.map((b) => (
+            <div
+              key={b.player.id}
+              ref={(el) => { ghostRefs.current[b.player.id] = el; }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 14px 6px 6px",
+                background: "rgba(11,16,24,0.96)",
+                border: "1px solid rgba(242,237,224,0.65)",
+                borderRadius: 999,
+                color: "#F2EDE0",
+                fontFamily: "'Saira Condensed', 'Arial Narrow', sans-serif",
+                fontWeight: 800,
+                fontSize: 12,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                boxShadow: "0 10px 28px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.4)",
+                whiteSpace: "nowrap",
+                width: "fit-content",
+              }}
+            >
+              <div
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: "50%",
+                  flex: "0 0 auto",
+                  background: "radial-gradient(circle at 50% 35%, #FFFFFF 0%, #F2EDE0 45%, #DCD7C8 100%)",
+                  border: "1px solid rgba(0,0,0,0.3)",
+                  overflow: "hidden",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={b.player.photo_path}
+                  alt=""
+                  draggable={false}
+                  decoding="async"
+                  style={{ width: "110%", height: "110%", objectFit: "cover", objectPosition: "50% 25%" }}
+                />
+              </div>
+              <span>{b.player.name}</span>
+            </div>
+          ))}
         </div>
       </div>
     </>

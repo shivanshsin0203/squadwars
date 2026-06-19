@@ -31,6 +31,12 @@ import type {
 } from "../types.js";
 import { getSlots, type SlotDef } from "../match/squadFormations.js";
 import { costForUsage } from "./deepseek.js";
+import {
+  SquadResponseSchema,
+  SquadXiEntrySchema,
+  SquadBenchEntrySchema,
+  ProseResponseSchema,
+} from "../schemas/llm.js";
 
 // ─────────────────────────── shared client ───────────────────────────
 
@@ -256,8 +262,14 @@ export async function planAiSquad(
         temperature: 0.5,
         maxTokens: 700,
       });
-      const parsed = JSON.parse(content) as { xi?: unknown; bench?: unknown };
-      const squad = validateSquadJson(parsed, slots, roster, req.matchId);
+      const rawParsed: unknown = JSON.parse(content);
+      const outerParse = SquadResponseSchema.safeParse(rawParsed);
+      if (!outerParse.success) {
+        throw new Error(
+          `squad response shape invalid: ${outerParse.error.issues[0]?.message ?? "missing xi/bench"}`
+        );
+      }
+      const squad = validateSquadJson(outerParse.data, slots, roster, req.matchId);
       console.log(
         `[LLM:ai-xi] id=${req.matchId} OK (attempt ${attempt}) xi=${squad.xi.length} bench=${squad.bench.length}`
       );
@@ -278,7 +290,7 @@ export async function planAiSquad(
 // ─────────────── validator: LLM JSON → Squad (drops bad entries, fills gaps via greedy) ───────────────
 
 function validateSquadJson(
-  parsed: { xi?: unknown; bench?: unknown },
+  parsed: { xi: unknown[]; bench: unknown[] },
   slots: SlotDef[],
   roster: BoughtPlayer[],
   matchId: string
@@ -292,23 +304,18 @@ function validateSquadJson(
   const xi: { slotId: string; playerId: number }[] = [];
   const filledSlots = new Set<string>();
 
-  if (Array.isArray(parsed.xi)) {
-    for (const raw of parsed.xi) {
-      const entry = raw as { slotId?: unknown; playerId?: unknown };
-      const slotId = typeof entry.slotId === "string" ? entry.slotId : null;
-      const playerId =
-        typeof entry.playerId === "number" && Number.isInteger(entry.playerId)
-          ? entry.playerId
-          : null;
-      if (!slotId || playerId === null) continue;
-      if (!slotById.has(slotId)) continue;
-      if (filledSlots.has(slotId)) continue;
-      if (!rosterById.has(playerId)) continue;
-      if (used.has(playerId)) continue;
-      xi.push({ slotId, playerId });
-      filledSlots.add(slotId);
-      used.add(playerId);
-    }
+  for (const raw of parsed.xi) {
+    // Per-entry safeParse — one malformed row drops only that row.
+    const parsedEntry = SquadXiEntrySchema.safeParse(raw);
+    if (!parsedEntry.success) continue;
+    const { slotId, playerId } = parsedEntry.data;
+    if (!slotById.has(slotId)) continue;
+    if (filledSlots.has(slotId)) continue;
+    if (!rosterById.has(playerId)) continue;
+    if (used.has(playerId)) continue;
+    xi.push({ slotId, playerId });
+    filledSlots.add(slotId);
+    used.add(playerId);
   }
 
   // Fill any slots the LLM missed using greedy best-fit on remaining roster.
@@ -331,20 +338,15 @@ function validateSquadJson(
   // Bench: take LLM's picks if valid, otherwise fill by remaining OVR.
   const bench: { index: number; playerId: number }[] = [];
   const benchUsed = new Set<number>();
-  if (Array.isArray(parsed.bench)) {
-    for (const raw of parsed.bench) {
-      const entry = raw as { index?: unknown; playerId?: unknown };
-      const playerId =
-        typeof entry.playerId === "number" && Number.isInteger(entry.playerId)
-          ? entry.playerId
-          : null;
-      if (playerId === null) continue;
-      if (used.has(playerId) || benchUsed.has(playerId)) continue;
-      if (!rosterById.has(playerId)) continue;
-      bench.push({ index: bench.length, playerId });
-      benchUsed.add(playerId);
-      if (bench.length >= 5) break;
-    }
+  for (const raw of parsed.bench) {
+    const parsedEntry = SquadBenchEntrySchema.safeParse(raw);
+    if (!parsedEntry.success) continue;
+    const { playerId } = parsedEntry.data;
+    if (used.has(playerId) || benchUsed.has(playerId)) continue;
+    if (!rosterById.has(playerId)) continue;
+    bench.push({ index: bench.length, playerId });
+    benchUsed.add(playerId);
+    if (bench.length >= 5) break;
   }
   if (bench.length < 5) {
     const remaining = roster
@@ -640,9 +642,15 @@ export async function writeVerdictProse(req: ProseRequest): Promise<ProseResult>
         // give headroom because the model occasionally adds whitespace.
         maxTokens: 380,
       });
-      const parsed = JSON.parse(content) as { report?: unknown; roast?: unknown };
-      const report = typeof parsed.report === "string" ? parsed.report.trim() : "";
-      const roast = typeof parsed.roast === "string" ? parsed.roast.trim() : "";
+      const rawParsed: unknown = JSON.parse(content);
+      const parseResult = ProseResponseSchema.safeParse(rawParsed);
+      if (!parseResult.success) {
+        throw new Error(
+          `prose response shape invalid: ${parseResult.error.issues[0]?.message ?? "missing report/roast"}`
+        );
+      }
+      const report = parseResult.data.report.trim();
+      const roast = parseResult.data.roast.trim();
       if (!report || !roast) throw new Error("missing report or roast in response");
       console.log(
         `[LLM:verdict] id=${req.matchId} OK (attempt ${attempt}) report.len=${report.length} roast.len=${roast.length}`

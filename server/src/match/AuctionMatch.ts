@@ -85,6 +85,9 @@ export class AuctionMatch {
   readonly formation: string;
   readonly difficulty: Difficulty;
   readonly createdAt: number;
+  /** Per-match session token bound to the issuing browser via a cookie.
+   *  Required on every /api/match/:id/* request. Never sent in toClientDTO. */
+  readonly sessionToken: string;
 
   // ─────── top-level lifecycle ───────
   status: MatchStatus = "in_progress";
@@ -134,6 +137,9 @@ export class AuctionMatch {
     this.formation = opts.formation;
     this.difficulty = opts.difficulty ?? DEFAULT_DIFFICULTY;
     this.createdAt = Date.now();
+    // 32-char (~192-bit) session token — never returned in toClientDTO,
+    // bound to the client via an HttpOnly cookie at match creation.
+    this.sessionToken = nanoid(32);
     this.queue = buildQueue(opts.formation);
 
     const expectedLen = getQueueTotal(opts.formation);

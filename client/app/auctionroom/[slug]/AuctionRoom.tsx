@@ -6,6 +6,8 @@ import type { Category, LotStateDTO, MatchStateDTO } from "@/lib/types";
 import { fmtCountdown, fmtMoney } from "@/lib/format";
 import SquadBuilder from "../../squad-builder/SquadBuilder";
 import ResultScreen from "../../squad-builder/ResultScreen";
+import { useToast } from "../../_components/Toast";
+import { apiFetch, ApiError, toastFromApiError } from "../../_lib/apiClient";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -261,19 +263,31 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
 
   // ─────────────────────── API helpers ───────────────────────
 
+  const { push } = useToast();
+
   const api = useCallback(
     async (path: string, init?: RequestInit) => {
-      const res = await fetch(`${BACKEND_URL}/api/match/${matchId}${path}`, {
-        ...init,
-        headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
+      try {
+        return await apiFetch<MatchStateDTO | LotEndResp>(
+          `${BACKEND_URL}/api/match/${matchId}${path}`,
+          init
+        );
+      } catch (err) {
+        // Critical statuses → toast immediately, so the user sees the
+        // rate-limit countdown / session-expired notice / network drop even
+        // if the local catch swallows the error silently (fireAi, callLotEnd).
+        // 400 / 409 / 425 are bid-loop noise — surfaced inline by callers.
+        if (err instanceof ApiError) {
+          const inline =
+            err.status === 400 || err.status === 409 || err.status === 425;
+          if (!inline) toastFromApiError(err, push);
+        } else {
+          toastFromApiError(err, push);
+        }
+        throw err;
       }
-      return data as MatchStateDTO | LotEndResp;
     },
-    [matchId]
+    [matchId, push]
   );
 
   // ─────────────────────── boot ───────────────────────

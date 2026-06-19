@@ -233,7 +233,7 @@ export default function LandingPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_URL}/health`)
+    fetch(`${BACKEND_URL}/health`, { credentials: "include" })
       .then((r) => r.json())
       .then(() => { if (!cancelled) setHealth("ok"); })
       .catch(() => { if (!cancelled) setHealth("bad"); });

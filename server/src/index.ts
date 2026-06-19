@@ -7,7 +7,17 @@ import { matchRoutes } from "./routes/match.js";
 
 const app = new Hono();
 
-app.use("*", cors({ origin: "http://localhost:3000" }));
+// credentials:true is required for the sw_session cookie to be sent on
+// cross-origin XHR (client at :3000, server at :8787). Origin MUST be a
+// specific URL when credentials is on — wildcard "*" is forbidden by the
+// browser in that mode. Override CORS_ORIGIN in production via .env.
+app.use(
+  "*",
+  cors({
+    origin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+    credentials: true,
+  })
+);
 
 app.route("/health", health);
 app.route("/auctionroom", auctionroom);
