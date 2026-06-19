@@ -260,23 +260,30 @@ When designing a new page, decide what its signature is in the design plan *befo
 
 ### The Landing pattern (`/`)
 
-The very first screen. A doorway, not a control panel. The hero is the brand wordmark.
+> **Note — this section was rewritten for the public launch.** The original landing was a fixed-viewport *doorway* (`100vh`, `overflow: hidden`, wordmark + START + a five-fact spec strip, "don't list features"). That doorway is the right instinct for a returning player, but it converts cold traffic poorly: a stranger who lands here needs to understand *what the game is and how it's played* before committing. So the landing is now a **scrolling broadcast-narrative** — the doorway hero is preserved as the first viewport, then the page tells the story. This is a deliberate, documented **exception** to the "one screen, one signature, stay quiet" rule (§6) that governs the *in-game* screens. Marketing pages explain; game screens perform. Don't import this scrolling-feature-list pattern back into the auction room or chalkboard.
 
-**Wordmark composition.** Two-color: `SQUAD` in `--chalk`, `WARS` in `--floodlight`. Saira Condensed weight 800, font-size clamped `clamp(72px, 13vw, 168px)`, line-height 0.86 so the two halves of the lockup feel like one mass, letter-spacing tightened to `-0.005em`. A soft floodlight `text-shadow: 0 0 32px rgba(255, 182, 39, 0.10)` reads as ambient stadium glow — not a drop-shadow effect, not a glow filter that "bounces."
+The hero is still the brand wordmark. Everything below it is **scroll-revealed** and demonstrates the game with **native animated recreations of the real screens** — never screenshots or video (lighter, alive, on-brand by construction, and they never go stale as the UI evolves).
 
-**Page rhythm.** Top: tiny catalog stamp (`SQUADWARS · MATCHDAY 01 · PRE-GAME`) + backend status — broadcast lower-third minimal. Middle: wordmark, tagline, one paragraph of body copy, the START button. Bottom: a single-line spec strip with `TREASURY · QUEUE · ON THE BLOCK · STARTING XI · SHAPES` as label/value pairs, hairline-divided from above. **Five facts about the game, no more.** Don't list features.
+**Page structure (top to bottom).**
+1. **Sticky nav** — hidden at the top (`translateY(-100%)`), slides in once the user scrolls past the hero (`scrollY > 560`). Translucent ink with `backdrop-filter: blur(12px)` + a hairline bottom border. Holds the medallion + wordmark on the left, anchor links + a small persistent `▶ Play` commit on the right. Anchor links hide below 620px.
+2. **Hero** — a two-column grid (`1.05fr 0.95fr`). Left: catalog stamp, wordmark, tagline, one paragraph, the START commit, and the five-fact spec strip (`TREASURY · QUEUE · ON THE BLOCK · STARTING XI · SHAPES`). Right: a **broadcast monitor** (bezel with `· · ·` dots + `SQUADWARS · LIVE FLOOR` label) framing the live-auction demo, so a cold visitor sees the game *playing* above the fold. A scroll cue sits under it.
+3. **The matchday — four steps** — alternating left/right rows (`.sw-step` / `.sw-step.flip`), each pairing copy with a native recreation: ① *Chalk your shape* → the re-chalking pitch cycling all six formations; ② *Take to the floor* → the live-auction demo (split-flap clock + three-state bid banner); ③ *Build the XI* → mini pitch with chemistry links drawing in + count-up OVR/CHEM; ④ *Full time* → the YOU-vs-AI scoreboard counting up to a verdict. On mobile each row stacks **copy-then-demo**.
+4. **Meet the opponents** — the three pundit-AI cards (real `/easy /medium /hard` portraits, Henry flagged `RECOMMENDED`).
+5. **Why it hits different** — a feature grid (`.sw-card` + corner ticks). *This section is the explicit break from "don't list features."*
+6. **Final CTA** — a second chalk `▶ START GAME` restating the hook.
+7. **Footer** — medallion + catalog stamp + one-line mono note.
 
-**Entrance choreography.** Stagger the hero block in over 700ms total:
-- Wordmark: `sw-wordmark-in` 0ms — clip-path reveal top-to-bottom + 14px upward translate.
-- Tagline: 200ms `sw-fade-in`.
-- Body paragraph: 300ms `sw-fade-in`.
-- Commit row: 400ms `sw-fade-in`.
+**Wordmark composition.** Two-color: `SQUAD` in `--chalk`, `WARS` in `--floodlight` (via a `.fl` span). Saira Condensed weight 800, `line-height: 0.84`, `letter-spacing: -0.01em`, soft floodlight `text-shadow: 0 0 36px rgba(255, 182, 39, 0.10)` for ambient stadium glow. **Size: `clamp(52px, 7.2vw, 120px)`** — deliberately more conservative than a full-width hero would allow, because the wordmark now lives in a ~half-width hero column and must never overflow it at the 2-col→1-col transition (~960px) or on the smallest phones.
 
-One orchestrated moment, not five. After that the page is still.
+**Entrance choreography (hero only).** Stagger the hero block in over ~700ms: wordmark `sw-wordmark-in` at 0ms (clip-path reveal + 14px upward translate); tagline 180ms, paragraph 280ms, commit row 380ms, spec strip 500ms via `sw-fade-in`; the monitor fades in at 450ms. One orchestrated moment. Below the fold, content animates **on scroll into view** (`.sw-reveal` + IntersectionObserver), not on load.
 
-**The only commit.** A single chalk `sw-btn-bid` reading `▶ START GAME` with a slightly larger drop-shadow than auction-page bids (`0 10px 30px rgba(242, 237, 224, 0.22)`) — it's the page's only weight. Helper text right of it stays in `--font-mono` `--dim` so it can't compete. Clicking navigates to `/setup` (the Chalkboard). No formation choice on this page — that decision belongs to the Chalkboard.
+**The commits.** Three chalk `sw-btn-bid`s exist on this page (nav, hero, final CTA) — this is allowed because they are the *same* commit repeated down a long scroll, not competing actions. The "at most one bid-style button per screen" rule (§9) is about a single in-game view; a scrolling landing legitimately repeats its single call-to-action. There is still no second *kind* of priority button. All three navigate to `/setup`; no formation choice belongs here.
 
-**Backend offline.** If `/health` 404s, the button still renders but explains itself before navigating — the landing should never push the user into a flow it can't deliver. Set the error in `--whistle-soft` adjacent to the button.
+**Backend offline.** If `/health` 404s, the buttons still render but explain themselves before navigating (`--whistle-soft` error, or helper text "backend offline") — the landing should never push the user into a flow it can't deliver.
+
+**Motion & accessibility.** All scroll reveals, the cycling demos, and the count-ups are gated behind `prefers-reduced-motion`: with reduced motion the loops freeze on their most-informative frame, reveals are instant, and count-ups jump to target. The container carries `overflow-x: hidden` as a horizontal-scroll safety net.
+
+**Responsive.** Three bands: **> 940px** desktop (2-col hero, 2-col steps, 3-col opponents/features); **621–940px** tablet (single-column story, 2-col opponents/features, demos centred at `max-width: 460px`); **≤ 620px** phone (everything single-column, tighter chrome, nav anchors hidden, signature numerals scaled down). Typography is fluid `clamp()` throughout.
 
 ### The Chalkboard pattern (Pre-match / `/setup`)
 
