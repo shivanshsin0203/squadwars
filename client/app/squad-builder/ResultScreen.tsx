@@ -25,16 +25,23 @@
  *   - Saira Condensed display, Inter body, JetBrains Mono numerals
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type {
   BoughtPlayer,
   Category,
   ResultPayload,
   Squad,
+  Verdict,
   VerdictCategory,
 } from "@/lib/types";
 import { FORMATIONS, type XISlotDef } from "./SquadBuilder";
+import {
+  buildShareText,
+  buildTweetIntent,
+  encodeShareData,
+  type ShareData,
+} from "@/lib/shareCard";
 
 type ResultScreenProps = {
   payload: ResultPayload;
@@ -300,80 +307,115 @@ function CategoryBar({
 
 // ─────────────────────────── shareable card ───────────────────────────
 
+function XGlyph() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z" />
+    </svg>
+  );
+}
+
 function ShareableCard({
-  matchId,
   verdict,
   formation,
   topSignings,
 }: {
-  matchId: string;
-  verdict: { winner: "user" | "ai" | "draw"; score: { user: number; ai: number }; userChem: number };
+  verdict: Verdict;
   formation: string;
   topSignings: BoughtPlayer[];     // user's 3 priciest, for the flex chips
 }) {
   const [copied, setCopied] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
 
-  const onCopy = () => {
-    const text =
-      verdict.winner === "user"
-        ? `Won my SquadWars match ${verdict.score.user}-${verdict.score.ai} (${formation}, chem ${verdict.userChem}). match: ${matchId}`
-        : verdict.winner === "ai"
-        ? `Lost my SquadWars match ${verdict.score.ai}-${verdict.score.user} (${formation}). match: ${matchId}`
-        : `Drew my SquadWars match (${formation}). match: ${matchId}`;
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1600);
-      }).catch(() => undefined);
+  // The whole result packs into the link — the public /r/[token] page + its OG
+  // image decode it with no backend call (see lib/shareCard.ts).
+  const data = useMemo<ShareData>(
+    () => ({
+      w: verdict.winner === "user" ? "u" : verdict.winner === "ai" ? "a" : "d",
+      s: [verdict.score.user, verdict.score.ai],
+      f: formation,
+      p: verdict.personaName,
+      uo: verdict.userOverall,
+      ao: verdict.aiOverall,
+      uc: verdict.userChem,
+      ac: verdict.aiChem,
+      m: topSignings.map((b) => b.player.name),
+    }),
+    [verdict, formation, topSignings]
+  );
+  const token = useMemo(() => encodeShareData(data), [data]);
+
+  // Build against the live origin so the link is correct in dev and prod alike.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setShareUrl(`${window.location.origin}/r/${token}`);
     }
+  }, [token]);
+
+  const onShareX = () => {
+    if (!shareUrl) return;
+    window.open(buildTweetIntent(shareUrl, buildShareText(data)), "_blank", "noopener,noreferrer");
+  };
+  const onCopy = () => {
+    if (!shareUrl || typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    }).catch(() => undefined);
   };
 
-  const medal =
-    verdict.winner === "user" ? "★" : verdict.winner === "ai" ? "✕" : "≈";
-  const medalClass =
-    verdict.winner === "user" ? "is-win" : verdict.winner === "ai" ? "is-lose" : "is-draw";
+  const isWin = verdict.winner === "user";
+  const isLoss = verdict.winner === "ai";
+  const medal = isWin ? "★" : isLoss ? "✕" : "≈";
+  const sealClass = isWin ? "is-win" : isLoss ? "is-lose" : "is-draw";
+  const accent = isWin ? "var(--chalk)" : isLoss ? "var(--floodlight)" : "var(--dim)";
 
   return (
     <div className="sw-share">
+      <span className="sw-share-stripe" style={{ background: accent }} />
       <span className="sw-tick-tl" /><span className="sw-tick-tr" />
       <span className="sw-tick-bl" /><span className="sw-tick-br" />
-      <div className="sw-share-medal-wrap">
-        <span className={`sw-share-medal ${medalClass}`}>{medal}</span>
+
+      <div className="sw-share-seal-wrap">
+        <span className="sw-share-ft">Full time</span>
+        <span className={`sw-share-seal ${sealClass}`}>{medal}</span>
       </div>
+
       <div className="sw-share-body">
-        <div className="sw-eyebrow">SHAREABLE CARD</div>
-        <div className="sw-share-line">
-          <span style={{ color: "var(--chalk)", fontWeight: 800 }}>YOU</span>
-          <span className="sw-mono" style={{ margin: "0 8px" }}>
-            {verdict.score.user}–{verdict.score.ai}
-          </span>
-          <span style={{ color: "var(--floodlight)", fontWeight: 800 }}>AI</span>
-          <span style={{ color: "var(--muted)", marginLeft: 12 }}>
-            · {formation} · CHEM {verdict.userChem}
-          </span>
+        <div className="sw-eyebrow">Share your card</div>
+        <div className="sw-share-score">
+          <span className="you">YOU</span>
+          <span className="sw-mono num">{verdict.score.user}</span>
+          <span className="dash">–</span>
+          <span className="sw-mono num">{verdict.score.ai}</span>
+          <span className="ai">AI</span>
+        </div>
+        <div className="sw-share-sub sw-mono">
+          {formation} · vs {verdict.personaName} · OVR {verdict.userOverall}·{verdict.aiOverall} · CHEM {verdict.userChem}·{verdict.aiChem}
         </div>
         {topSignings.length > 0 && (
           <div className="sw-share-chips">
-            <span className="sw-eyebrow sw-eyebrow-dim" style={{ fontSize: 9 }}>
-              MARQUEE SIGNINGS
-            </span>
             {topSignings.map((b) => (
-              <span key={b.player.id} className="sw-share-chip">
-                <span className="sw-share-chip-name">{b.player.name}</span>
-                <span className="sw-share-chip-price sw-mono">{fmtMoney(b.price)}</span>
-              </span>
+              <span key={b.player.id} className="sw-share-chip">{b.player.name}</span>
             ))}
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className={`sw-btn sw-share-btn ${copied ? "is-copied" : ""}`}
-        onClick={onCopy}
-        aria-live="polite"
-      >
-        {copied ? "COPIED  ✓" : "COPY MATCH CARD"}
-      </button>
+
+      <div className="sw-share-actions">
+        <button type="button" className="sw-share-x" onClick={onShareX} disabled={!shareUrl}>
+          <XGlyph /> Share on X
+        </button>
+        <button
+          type="button"
+          className={`sw-share-copy ${copied ? "is-copied" : ""}`}
+          onClick={onCopy}
+          disabled={!shareUrl}
+          aria-live="polite"
+        >
+          {copied ? "Link copied ✓" : "⧉ Copy link"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -609,7 +651,6 @@ export default function ResultScreen({
         {/* ─── SHAREABLE ─── */}
         <div className="sw-reveal" style={{ animationDelay: "420ms" }}>
           <ShareableCard
-            matchId={matchId}
             verdict={verdict}
             formation={formation}
             topSignings={topSignings}
@@ -1083,93 +1124,75 @@ const tokens = `
     color: var(--chalk);
   }
 
-  /* ─── shareable strip ─── */
+  /* ─── shareable card ─── */
   .sw-share {
+    position: relative;
     background:
-      radial-gradient(ellipse 80% 60% at 0% 0%, rgba(242,237,224,0.06), transparent 60%),
-      radial-gradient(ellipse 70% 60% at 100% 100%, rgba(255,182,39,0.06), transparent 60%),
+      radial-gradient(ellipse 70% 130% at 0% 0%, rgba(242,237,224,0.06), transparent 55%),
+      radial-gradient(ellipse 70% 130% at 100% 100%, rgba(255,182,39,0.06), transparent 55%),
       var(--surface-1);
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--hairline-strong);
     border-radius: var(--r-lg);
-    padding: 14px 18px;
-    display: flex; align-items: center; gap: 18px;
-    position: relative;
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-  }
-  .sw-share:hover {
-    transform: translateY(-2px);
-    border-color: var(--hairline-strong);
-    box-shadow: 0 14px 38px rgba(0,0,0,0.45);
-  }
-  .sw-share-medal-wrap {
-    display: flex; align-items: center; justify-content: center;
-    width: 54px; height: 54px;
-    border-radius: 50%;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline-strong);
-    flex: 0 0 auto;
-    position: relative;
-  }
-  .sw-share-medal {
-    font-family: var(--font-display);
-    font-size: 26px;
-    line-height: 1;
-    font-weight: 800;
-  }
-  .sw-share-medal.is-win {
-    color: var(--chalk);
-    text-shadow: 0 0 14px rgba(242,237,224,0.6);
-  }
-  .sw-share-medal.is-lose {
-    color: var(--floodlight);
-    text-shadow: 0 0 14px rgba(255,182,39,0.55);
-  }
-  .sw-share-medal.is-draw {
-    color: var(--muted);
-  }
-  .sw-share-body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
-  .sw-share-line {
-    font-family: var(--font-display); font-size: 17px;
-    letter-spacing: 0.10em; text-transform: uppercase;
-    margin-top: 2px;
-  }
-  .sw-share-chips {
-    display: flex; align-items: center; flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 2px;
-  }
-  .sw-share-chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 8px 2px;
-    background: var(--surface-2);
-    border: 1px solid var(--hairline-strong);
-    border-radius: 999px;
-    font-family: var(--font-display); font-weight: 700;
-    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--text);
-    transition: border-color 0.16s ease, transform 0.16s ease;
-  }
-  .sw-share-chip:hover {
-    border-color: rgba(242,237,224,0.40);
-    transform: translateY(-1px);
-  }
-  .sw-share-chip-price {
-    color: var(--floodlight);
-    font-size: 10px;
-  }
-  .sw-share-btn {
-    padding: 10px 18px;
-    font-size: 11px;
-    min-width: 170px;
-    position: relative;
+    padding: 16px 20px 16px 24px;
+    display: flex; align-items: center; gap: 20px;
     overflow: hidden;
-    flex: 0 0 auto;
   }
-  .sw-share-btn.is-copied {
-    background: var(--chalk);
-    color: var(--ink);
-    border-color: var(--chalk);
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 8px 26px rgba(242,237,224,0.30);
+  .sw-share-stripe { position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
+
+  .sw-share-seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .sw-share-ft { font-family: var(--font-display); font-weight: 700; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
+  .sw-share-seal {
+    width: 58px; height: 58px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 800; font-size: 26px; line-height: 1;
+    background: var(--surface-2); border: 1.5px solid var(--hairline-strong);
+  }
+  .sw-share-seal.is-win { color: var(--chalk); border-color: rgba(242,237,224,0.5); box-shadow: 0 0 18px rgba(242,237,224,0.22), inset 0 0 12px rgba(242,237,224,0.07); }
+  .sw-share-seal.is-lose { color: var(--floodlight); border-color: rgba(255,182,39,0.5); box-shadow: 0 0 18px rgba(255,182,39,0.20), inset 0 0 12px rgba(255,182,39,0.07); }
+  .sw-share-seal.is-draw { color: var(--muted); }
+
+  .sw-share-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+  .sw-share-score { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); }
+  .sw-share-score .you { font-weight: 800; font-size: 14px; letter-spacing: 0.18em; color: var(--chalk); }
+  .sw-share-score .ai { font-weight: 800; font-size: 14px; letter-spacing: 0.18em; color: var(--floodlight); }
+  .sw-share-score .num { font-size: 30px; font-weight: 800; color: var(--text); line-height: 1; }
+  .sw-share-score .dash { color: var(--dim); font-size: 20px; }
+  .sw-share-sub { font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
+  .sw-share-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 1px; }
+  .sw-share-chip {
+    display: inline-flex; align-items: center; padding: 3px 10px;
+    background: var(--surface-2); border: 1px solid var(--hairline-strong); border-radius: 999px;
+    font-family: var(--font-display); font-weight: 700; font-size: 9.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--chalk);
+  }
+
+  .sw-share-actions { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+  .sw-share-x, .sw-share-copy {
+    font-family: var(--font-display); font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+    border-radius: var(--r-md); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    transition: background 0.12s ease, transform 0.05s ease, box-shadow 0.2s ease;
+  }
+  .sw-share-x {
+    font-size: 12px; padding: 11px 18px; min-width: 168px;
+    background: var(--chalk); color: var(--ink); border: 1px solid var(--chalk);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 8px 24px rgba(242,237,224,0.18);
+  }
+  .sw-share-x:hover:not(:disabled) { background: #FFFCF2; transform: translateY(-1px); }
+  .sw-share-copy {
+    font-size: 11px; padding: 9px 18px; min-width: 168px;
+    background: var(--surface-3); color: var(--text); border: 1px solid var(--hairline-strong);
+  }
+  .sw-share-copy:hover:not(:disabled) { background: #232C3D; }
+  .sw-share-copy.is-copied { background: var(--chalk); color: var(--ink); border-color: var(--chalk); }
+  .sw-share-x:disabled, .sw-share-copy:disabled { opacity: 0.55; cursor: default; }
+
+  @media (max-width: 720px) {
+    .sw-share { flex-direction: column; align-items: stretch; text-align: center; padding: 16px; }
+    .sw-share-seal-wrap { flex-direction: row; justify-content: center; gap: 12px; }
+    .sw-share-score, .sw-share-chips { justify-content: center; }
+    .sw-share-actions { flex-direction: row; }
+    .sw-share-x, .sw-share-copy { flex: 1; min-width: 0; }
   }
 
   /* ─── reveal animation (used on top-level sections) ─── */

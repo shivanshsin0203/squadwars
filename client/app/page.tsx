@@ -531,6 +531,32 @@ const tokens = `
   .sw-feature-body { font-family: var(--font-body); font-size: 13px; line-height: 1.55; color: var(--muted); margin-top: 8px; }
   .sw-feature-ico { width: 26px; height: 26px; }
 
+  /* ── intel / fog of war ── */
+  .sw-intel { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .sw-intel-col { display: flex; flex-direction: column; gap: 12px; }
+  .sw-intel-colhead { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; font-family: var(--font-display); font-weight: 800; font-size: 13px; letter-spacing: 0.20em; text-transform: uppercase; }
+  .sw-intel-colhead .pin { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .sw-intel-card { position: relative; flex: 1; background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-lg); padding: 18px 18px 18px 22px; overflow: hidden; }
+  .sw-intel-card.hidden { background: var(--surface-2); border: 1.5px dashed var(--hairline-strong); padding-left: 18px; }
+  .sw-intel-stripe { position: absolute; top: 0; left: 0; bottom: 0; width: 4px; }
+  .sw-intel-head { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+  .sw-intel-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .sw-intel-card.hidden .sw-intel-dot { background: transparent; border: 1.5px dashed var(--muted); }
+  .sw-intel-tag { font-family: var(--font-display); font-weight: 700; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; }
+  .sw-intel-title { font-family: var(--font-display); font-weight: 800; font-size: 17px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--chalk); }
+  .sw-intel-card.hidden .sw-intel-title { color: var(--muted); }
+  .sw-intel-body { font-family: var(--font-body); font-size: 13px; line-height: 1.55; color: var(--muted); margin: 8px 0 0; }
+  .sw-intel-motif { display: flex; align-items: center; gap: 7px; margin-top: 14px; }
+  .sw-intel-disc { width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 50% 35%, #FFFFFF 0%, var(--chalk) 55%, #DCD7C8 100%); border: 1px solid rgba(0,0,0,0.3); flex: 0 0 auto; }
+  .sw-intel-chemline { font-family: var(--font-mono); font-size: 11px; color: var(--keeper-blue); letter-spacing: 0.04em; }
+  .sw-redact { display: flex; gap: 6px; margin-top: 14px; }
+  .sw-redact i { flex: 1; height: 10px; border-radius: 2px; border: 1px dashed var(--hairline-strong); background: repeating-linear-gradient(45deg, var(--surface-3) 0, var(--surface-3) 4px, transparent 4px, transparent 8px); display: block; }
+  .sw-redact-q { width: 30px; height: 30px; border-radius: var(--r-sm); border: 1.5px dashed var(--hairline-strong); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 800; font-size: 18px; color: var(--dim); margin-top: 12px; }
+  .sw-strategy { position: relative; margin-top: 18px; background: linear-gradient(120deg, rgba(255,182,39,0.05), transparent 60%), var(--surface-1); border: 1px solid var(--hairline); border-left: 4px solid var(--floodlight); border-radius: var(--r-lg); padding: 22px 26px; }
+  .sw-strategy-l { font-family: var(--font-display); font-weight: 700; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--floodlight); }
+  .sw-strategy-t { font-family: var(--font-body); font-size: 15px; line-height: 1.65; color: var(--text); margin: 10px 0 0; }
+  .sw-strategy-t b { color: var(--chalk); font-weight: 700; }
+
   /* ── final CTA ── */
   .sw-cta { position: relative; text-align: center; padding: 80px 0 96px; }
   .sw-cta-title { font-family: var(--font-display); font-weight: 800; font-size: clamp(36px, 6vw, 76px); line-height: 0.92; letter-spacing: 0; text-transform: uppercase; color: var(--chalk); margin: 0 auto; max-width: 12ch; }
@@ -568,6 +594,7 @@ const tokens = `
     .sw-nav-anchor { display: none; }
     .sw-pundits { grid-template-columns: 1fr; }
     .sw-features { grid-template-columns: 1fr; }
+    .sw-intel { grid-template-columns: 1fr; }
     .sw-score { grid-template-columns: 1fr; }
     .sw-score-vs { display: none; }
     .sw-hero { padding: 96px 0 40px; }
@@ -1012,7 +1039,7 @@ export default function LandingPage() {
                   <span className="sep">·</span>
                   <span>ON THE BLOCK<span className="v">20s / LOT</span></span>
                   <span className="sep">·</span>
-                  <span>STARTING XI<span className="v">11</span></span>
+                  <span>SQUAD<span className="v">11 + 5</span></span>
                   <span className="sep">·</span>
                   <span>SHAPES<span className="v">6</span></span>
                 </div>
@@ -1069,13 +1096,15 @@ export default function LandingPage() {
                 <h3 className="sw-step-title">Take to the floor</h3>
                 <p className="sw-step-body">
                   Players come up one lot at a time, twenty seconds each. Lodge a bid, the AI fires
-                  back, and the chalk banner flips to whoever leads. Outbid the machine — or let it
-                  overpay and bank your treasury for the player you really want.
+                  back, and the chalk banner flips to whoever leads. Your signings bank on the right
+                  as you win them — but you never see the AI&apos;s squad, or who comes up next.
+                  Outbid the machine, or let it overpay and save your treasury for a player you
+                  actually need.
                 </p>
                 <div className="sw-step-tags">
                   <span className="sw-tag">Live bidding</span>
                   <span className="sw-tag">€1B treasury</span>
-                  <span className="sw-tag">Going once</span>
+                  <span className="sw-tag">Bid blind</span>
                 </div>
               </Reveal>
               <div className="sw-step-visual"><LiveAuctionDemo reduced={reduced} /></div>
@@ -1087,12 +1116,13 @@ export default function LandingPage() {
                 <div className="sw-step-index">03</div>
                 <h3 className="sw-step-title">Build the XI</h3>
                 <p className="sw-step-body">
-                  Drag your signings into the shape. Links form between shared clubs and nations,
-                  brewing chemistry that lifts the whole side. A clever, well-linked XI can outscore
-                  a pile of mismatched superstars.
+                  Drag your signings into your shape — a starting XI of eleven plus a five-man bench,
+                  sixteen players in all. Links form between shared clubs and nations, brewing
+                  chemistry that lifts the whole side. A clever, well-linked sixteen can outscore a
+                  pile of mismatched superstars.
                 </p>
                 <div className="sw-step-tags">
-                  <span className="sw-tag">Drag &amp; drop</span>
+                  <span className="sw-tag">XI + 5 bench</span>
                   <span className="sw-tag">Chemistry up to 37</span>
                   <span className="sw-tag">Team overall</span>
                 </div>
@@ -1116,6 +1146,111 @@ export default function LandingPage() {
               </Reveal>
               <div className="sw-step-visual"><ScoreboardDemo reduced={reduced} /></div>
             </div>
+          </div>
+        </section>
+
+        {/* ── the fog of war — hidden information & strategy ── */}
+        <section className="sw-section" id="strategy">
+          <div className="sw-wrap">
+            <Reveal reduced={reduced} className="sw-section-head">
+              <span className="sw-eyebrow">Read the room</span>
+              <h2 className="sw-section-title">Half the floor is <span className="fl">hidden</span></h2>
+              <p className="sw-section-sub">
+                You bid on instinct and the little you can piece together. What you can see — and
+                what you can&apos;t — is the whole game.
+              </p>
+            </Reveal>
+
+            <div className="sw-intel">
+              {/* what you see */}
+              <Reveal reduced={reduced}>
+                <div className="sw-intel-col">
+                  <div className="sw-intel-colhead" style={{ color: "var(--chalk)" }}>
+                    <span className="pin" style={{ background: "var(--chalk)", boxShadow: "0 0 8px var(--chalk)" }} />
+                    You see
+                  </div>
+                  <div className="sw-intel-card">
+                    <span className="sw-intel-stripe" style={{ background: "var(--chalk)" }} />
+                    <div className="sw-intel-head">
+                      <span className="sw-intel-dot" style={{ background: "var(--chalk)", boxShadow: "0 0 8px var(--chalk)" }} />
+                      <span className="sw-intel-tag" style={{ color: "var(--chalk)" }}>Visible</span>
+                    </div>
+                    <div className="sw-intel-title">Your dressing room</div>
+                    <p className="sw-intel-body">
+                      Every player you win banks on the right — your squad, in full view, all
+                      night. You always know exactly what you&apos;ve got and where the gaps are.
+                    </p>
+                    <div className="sw-intel-motif">
+                      <span className="sw-intel-disc" /><span className="sw-intel-disc" />
+                      <span className="sw-intel-disc" /><span className="sw-intel-disc" />
+                      <span className="sw-intel-chemline" style={{ color: "var(--dim)" }}>· 4 signed</span>
+                    </div>
+                  </div>
+                  <div className="sw-intel-card">
+                    <span className="sw-intel-stripe" style={{ background: "var(--keeper-blue)" }} />
+                    <div className="sw-intel-head">
+                      <span className="sw-intel-dot" style={{ background: "var(--keeper-blue)", boxShadow: "0 0 8px var(--keeper-blue)" }} />
+                      <span className="sw-intel-tag" style={{ color: "var(--keeper-blue)" }}>Visible</span>
+                    </div>
+                    <div className="sw-intel-title">Live chemistry</div>
+                    <p className="sw-intel-body">
+                      Club and country links update on the left as you sign. Chase chemistry in real
+                      time, or pay up for raw rating — your call, mid-auction.
+                    </p>
+                    <div className="sw-intel-motif">
+                      <span className="sw-intel-chemline">CLUB ●●● · COUNTRY ●● · CHEM 31/37</span>
+                    </div>
+                  </div>
+                </div>
+              </Reveal>
+
+              {/* what you don't */}
+              <Reveal reduced={reduced} delay={120}>
+                <div className="sw-intel-col">
+                  <div className="sw-intel-colhead" style={{ color: "var(--dim)" }}>
+                    <span className="pin" style={{ background: "transparent", border: "1.5px dashed var(--muted)" }} />
+                    You don&apos;t
+                  </div>
+                  <div className="sw-intel-card hidden">
+                    <div className="sw-intel-head">
+                      <span className="sw-intel-dot" />
+                      <span className="sw-intel-tag" style={{ color: "var(--dim)" }}>Hidden</span>
+                    </div>
+                    <div className="sw-intel-title">The opposition&apos;s squad</div>
+                    <p className="sw-intel-body">
+                      You never see what the AI has bought. Loading up on strikers? Thin at the back?
+                      You&apos;re reading the bidding, not a team sheet.
+                    </p>
+                    <div className="sw-redact"><i /><i /><i /></div>
+                  </div>
+                  <div className="sw-intel-card hidden">
+                    <div className="sw-intel-head">
+                      <span className="sw-intel-dot" />
+                      <span className="sw-intel-tag" style={{ color: "var(--dim)" }}>Hidden</span>
+                    </div>
+                    <div className="sw-intel-title">The next lot</div>
+                    <p className="sw-intel-body">
+                      No queue, no preview. You don&apos;t know who comes up next — commit your
+                      treasury now, or gamble that someone better walks out.
+                    </p>
+                    <div className="sw-redact-q">?</div>
+                  </div>
+                </div>
+              </Reveal>
+            </div>
+
+            <Reveal reduced={reduced}>
+              <div className="sw-strategy">
+                <span className="sw-tick-tr" /><span className="sw-tick-br" />
+                <div className="sw-strategy-l">The play</div>
+                <p className="sw-strategy-t">
+                  So strategise. You&apos;re filling a <b>16-man squad</b> — a starting <b>XI of 11</b>{" "}
+                  and a <b>5-man bench</b> — from roughly <b>33 lots</b> and a <b>€1B treasury</b>.
+                  Blow it on three galácticos and you&apos;ll field cast-offs behind them. Bank it,
+                  watch the chemistry, and build a side that <i>links</i>.
+                </p>
+              </div>
+            </Reveal>
           </div>
         </section>
 
