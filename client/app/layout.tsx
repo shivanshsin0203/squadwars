@@ -1,16 +1,26 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Saira_Condensed, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "./_components/Toast";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// The design system's three faces, self-hosted + preloaded by next/font (no
+// render-blocking @import to Google, no first-paint FOUT on the wordmark).
+// Exposed as CSS variables the inline token blocks reference via var(--font-*).
+const saira = Saira_Condensed({
   subsets: ["latin"],
+  weight: ["500", "700", "800"],
+  variable: "--font-saira",
+  display: "swap",
 });
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const inter = Inter({
   subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains",
+  display: "swap",
 });
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://squadwars.app";
@@ -79,7 +89,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${saira.variable} ${inter.variable} ${jetbrainsMono.variable}`}>
       <body>
         <ToastProvider>{children}</ToastProvider>
       </body>

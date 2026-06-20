@@ -46,7 +46,6 @@ function bucketFillColor(filled: number, target: number): string {
 }
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
   .sw-auction {
     /* palette — stadium at night, not generic dashboard */
@@ -70,9 +69,9 @@ const tokens = `
     --hairline-strong: rgba(255, 255, 255, 0.10);
 
     /* type — Saira Condensed for displays/numerals, Inter body, JetBrains Mono for tabular prices */
-    --font-display: 'Saira Condensed', 'Arial Narrow', sans-serif;
-    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --font-display: var(--font-saira), 'Arial Narrow', sans-serif;
+    --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains), ui-monospace, Menlo, Consolas, monospace;
 
     /* shape */
     --r-sm: 4px;
@@ -250,6 +249,8 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [bidError, setBidError] = useState<string | null>(null);
   const [bootStatus, setBootStatus] = useState<string>("connecting…");
+  // Bumped by the boot-error "Retry" button to re-run the boot effect.
+  const [bootNonce, setBootNonce] = useState(0);
   const [customAmount, setCustomAmount] = useState<string>("");
   const [, force] = useState(0);
   const [lastResult, setLastResult] = useState<LotEndResp["lotResult"] | null>(null);
@@ -324,7 +325,7 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [matchId, api]);
+  }, [matchId, api, bootNonce]);
 
   // ─────────────────────── bid ───────────────────────
 
@@ -382,6 +383,12 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
         setState(s);
       } catch (e) {
         console.warn(`[CLIENT:lotEnd err]`, e);
+        // Resolving the lot is the one call that, if it silently fails, freezes
+        // the auction at 0:00 forever (the countdown tick won't re-fire because
+        // the lot is already marked ended). Re-arm it after a short delay so the
+        // tick loop auto-retries — a transient network blip self-heals instead
+        // of stranding the user. (The api() wrapper already toasted the error.)
+        setTimeout(() => { endedLotsRef.current.delete(lotIdx); }, 1200);
       }
     },
     [api]
@@ -426,10 +433,29 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
 
   if (error) {
     return (
-      <div style={{ padding: 24, color: "#E63946", fontFamily: "Inter, sans-serif" }}>
-        Error: {error}
-        <div>
-          <Link href="/">← home</Link>
+      <div className="sw-auction" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <style dangerouslySetInnerHTML={{ __html: tokens }} />
+        <div className="sw-card" style={{ maxWidth: 420, width: "100%", margin: 18, textAlign: "center", padding: "26px 24px" }}>
+          <span className="sw-tick-tl" /><span className="sw-tick-tr" />
+          <span className="sw-tick-bl" /><span className="sw-tick-br" />
+          <div className="sw-eyebrow" style={{ color: "var(--whistle)", justifyContent: "center" }}>Connection lost</div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 24, letterSpacing: "0.02em", textTransform: "uppercase", color: "var(--chalk)", margin: "10px 0 0" }}>
+            Couldn&apos;t reach the floor
+          </h2>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "var(--muted)", lineHeight: 1.55, margin: "12px 0 0" }}>
+            We lost contact with the match server. Check your connection and try again — your match is still live on the server.
+          </p>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", alignItems: "center", marginTop: 22 }}>
+            <button
+              type="button"
+              className="sw-btn-bid"
+              onClick={() => { setError(null); setBootStatus("reconnecting…"); setBootNonce((n) => n + 1); }}
+            >
+              ↻ Retry
+            </button>
+            <Link href="/" className="sw-btn">← Home</Link>
+          </div>
+          <p style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--dim)", marginTop: 16, wordBreak: "break-word" }}>{error}</p>
         </div>
       </div>
     );
@@ -510,12 +536,13 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
             youBought={state.user.bought.length}
             aiBudget={state.ai.budget}
             aiBought={state.ai.boughtCount}
-            totalSlots={11}
+            aiName={aiPersonaShort(state.difficulty)}
+            totalSlots={16}
           />
           <Ledger
             bought={state.user.bought}
             budget={state.user.budget}
-            totalSlots={11}
+            totalSlots={16}
           />
           <Chemistry bought={state.user.bought} />
         </div>
@@ -703,17 +730,29 @@ function TopBar({
 
 // ─────────────────────── Treasury (left column top) ───────────────────────
 
+/** Short opponent label by difficulty — shown on the OPPOSITION pill. */
+function aiPersonaShort(difficulty: string): string {
+  switch (difficulty) {
+    case "easy":   return "Richards AI";
+    case "medium": return "Carragher AI";
+    case "hard":   return "Henry AI";
+    default:       return "the AI";
+  }
+}
+
 function Treasury({
   youBudget,
   youBought,
   aiBudget,
   aiBought,
+  aiName,
   totalSlots,
 }: {
   youBudget: number;
   youBought: number;
   aiBudget: number;
   aiBought: number;
+  aiName: string;
   totalSlots: number;
 }) {
   const youAhead = youBudget > aiBudget;
@@ -726,14 +765,14 @@ function Treasury({
       <Pill
         side="you"
         budget={youBudget}
-        sub={`${youBought} signed · ${totalSlots - youBought} slots open`}
+        sub={`${youBought} signed · ${Math.max(0, totalSlots - youBought)} slots open`}
         highlight={youAhead}
       />
       <div style={{ height: 8 }} />
       <Pill
         side="ai"
         budget={aiBudget}
-        sub={`${aiBought} signed · dossier sealed`}
+        sub={`${aiBought} signed · vs ${aiName}`}
         highlight={!youAhead}
       />
     </div>

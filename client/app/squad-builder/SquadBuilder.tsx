@@ -43,11 +43,21 @@
  *     bench bonus    = +1 per starter sharing club/country with any bench player (cap 4)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { polyfill as polyfillTouchDnd } from "mobile-drag-drop";
-import { scrollBehaviourDragImageTranslateOverride } from "mobile-drag-drop/scroll-behaviour";
-import "mobile-drag-drop/default.css";
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragStartEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import type { BoughtPlayer, Category, Player, SquadBenchEntry, SquadXIEntry } from "@/lib/types";
 
 // ─────────────────────────── slot tables (per formation) ───────────────────────────
@@ -311,56 +321,64 @@ function computeChemistry(
   return { total: Math.min(37, xiTotal + benchBonus), xiTotal, benchBonus, perStarter, benchContributors };
 }
 
-// ─────────────────────────── custom drag image ───────────────────────────
+// ─────────────────────────── drag ghost (dnd-kit DragOverlay) ───────────────────────────
 
-function makeDragImage(name: string, photoPath: string): HTMLDivElement {
-  const el = document.createElement("div");
-  el.setAttribute("data-sw-drag-image", "1");
-  el.style.cssText = [
-    "position:absolute", "top:-1000px", "left:-1000px",
-    "display:flex", "align-items:center", "gap:8px",
-    "padding:6px 14px 6px 6px",
-    "background:rgba(11,16,24,0.96)",
-    "border:1px solid rgba(242,237,224,0.65)",
-    "border-radius:999px",
-    "color:#F2EDE0",
-    "font-family:'Saira Condensed', 'Arial Narrow', sans-serif",
-    "font-weight:800", "font-size:12px", "letter-spacing:0.06em",
-    "text-transform:uppercase",
-    "box-shadow:0 10px 28px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.4)",
-    "pointer-events:none", "white-space:nowrap",
-  ].join(";");
-  el.innerHTML = `
-    <div style="width:30px;height:30px;border-radius:50%;flex:0 0 auto;
-                background:radial-gradient(circle at 50% 35%, #FFFFFF 0%, #F2EDE0 45%, #DCD7C8 100%);
-                border:1px solid rgba(0,0,0,0.3); overflow:hidden;
-                display:flex; align-items:center; justify-content:center;">
-      <img src="${photoPath}" alt="" draggable="false"
-           onerror="this.style.display='none'"
-           style="width:110%;height:110%;object-fit:cover;object-position:50% 25%;" />
+/** The pill that follows the pointer during a drag — transparent photo + name.
+ *  dnd-kit's DragOverlay renders this in a portal and positions it itself, so
+ *  there's no setDragImage snapshot race (the old first-drag-blank-photo bug). */
+function DragGhost({ bp }: { bp: BoughtPlayer }) {
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "6px 14px 6px 6px",
+        background: "rgba(11,16,24,0.96)",
+        border: "1px solid rgba(242,237,224,0.65)",
+        borderRadius: 999, color: "#F2EDE0",
+        fontFamily: "var(--font-saira), 'Arial Narrow', sans-serif",
+        fontWeight: 800, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase",
+        boxShadow: "0 14px 32px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.4)",
+        whiteSpace: "nowrap", width: "fit-content", cursor: "grabbing",
+      }}
+    >
+      <div
+        style={{
+          width: 30, height: 30, borderRadius: "50%", flex: "0 0 auto",
+          background: "radial-gradient(circle at 50% 35%, #FFFFFF 0%, #F2EDE0 45%, #DCD7C8 100%)",
+          border: "1px solid rgba(0,0,0,0.3)", overflow: "hidden",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={bp.player.photo_path}
+          alt=""
+          draggable={false}
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          style={{ width: "110%", height: "110%", objectFit: "cover", objectPosition: "50% 25%" }}
+        />
+      </div>
+      <span>{bp.player.name}</span>
     </div>
-    <span>${name}</span>
-  `;
-  document.body.appendChild(el);
-  return el;
+  );
+}
+
+// dnd-kit id helpers. A placed player appears BOTH in the pool list (dimmed) and
+// on the field, so their two draggables need DISTINCT ids — prefix encodes origin,
+// suffix is the player id. Drop targets parse back to a Placement.
+const dragId = (origin: "pool" | "field", playerId: number) => `${origin}#${playerId}`;
+const playerIdFromDrag = (id: string | number) => Number(String(id).split("#")[1]);
+
+/** Merge dnd-kit's draggable + droppable node-ref setters onto one element. */
+function combineRefs(...setters: Array<(el: HTMLElement | null) => void>) {
+  return (el: HTMLElement | null) => { for (const set of setters) set(el); };
 }
 
 // ─────────────────────────── tokens ───────────────────────────
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
   html, body { margin: 0; padding: 0; height: 100%; }
-
-  /* mobile-drag-drop's default.css forgets pointer-events:none on the drag
-     image. Without it document.elementFromPoint(touchX, touchY) returns the
-     drag image (which is between the finger and the page), so the polyfill
-     never finds the real drop target underneath — drops silently fail. */
-  .dnd-poly-drag-image {
-    pointer-events: none !important;
-    -webkit-user-select: none;
-    user-select: none;
-  }
 
   .sw-sb {
     --ink: #0B1018;
@@ -382,9 +400,9 @@ const tokens = `
     --hairline: rgba(255, 255, 255, 0.06);
     --hairline-strong: rgba(255, 255, 255, 0.10);
 
-    --font-display: 'Saira Condensed', 'Arial Narrow', sans-serif;
-    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --font-display: var(--font-saira), 'Arial Narrow', sans-serif;
+    --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains), ui-monospace, Menlo, Consolas, monospace;
 
     --r-sm: 4px;
     --r-md: 8px;
@@ -1425,39 +1443,33 @@ function PitchLines() {
 }
 
 function XISlotView({
-  slot, bp, dragOver, selected, isDraggingSource,
-  onDragOver, onDragLeave, onDrop, onDragStart, onDragEnd, onClick,
+  slot, bp, selected, isDraggingSource, onClick,
 }: {
   slot: XISlotDef;
   bp: BoughtPlayer | undefined;
-  dragOver: boolean;
   selected: boolean;
   isDraggingSource: boolean;
-  onDragOver: (e: React.DragEvent) => void;
-  onDragLeave: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent) => void;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragEnd: (e: React.DragEvent) => void;
   onClick: () => void;
 }) {
   const fit = bp ? evaluateFit(bp.player, slot) : null;
   const accent = categoryAccent(slot.cat);
+  // Slot is a drop target always, and a drag source when occupied. Merge both refs.
+  const drop = useDroppable({ id: `xi:${slot.id}` });
+  const drag = useDraggable({ id: bp ? dragId("field", bp.player.id) : `xi-empty:${slot.id}`, disabled: !bp });
+  const setRef = useMemo(() => combineRefs(drop.setNodeRef, drag.setNodeRef), [drop.setNodeRef, drag.setNodeRef]);
   return (
     <div
+      ref={setRef}
       className={[
         "sw-xi-slot",
-        dragOver && "is-drag-over",
+        drop.isOver && "is-drag-over",
         selected && "is-selected",
         isDraggingSource && "is-dragging-source",
       ].filter(Boolean).join(" ")}
-      style={{ left: `${slot.x}%`, top: `${(slot.y / 140) * 100}%` }}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      style={{ left: `${slot.x}%`, top: `${(slot.y / 140) * 100}%`, cursor: bp ? "grab" : "pointer" }}
       onClick={onClick}
-      draggable={!!bp}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      {...(bp ? drag.attributes : {})}
+      {...(bp ? drag.listeners : {})}
     >
       {bp ? (
         <>
@@ -1499,36 +1511,30 @@ function XISlotView({
 }
 
 function BenchSlotView({
-  index, bp, dragOver, selected, isDraggingSource,
-  onDragOver, onDragLeave, onDrop, onDragStart, onDragEnd, onClick,
+  index, bp, selected, isDraggingSource, onClick,
 }: {
   index: number;
   bp: BoughtPlayer | undefined;
-  dragOver: boolean;
   selected: boolean;
   isDraggingSource: boolean;
-  onDragOver: (e: React.DragEvent) => void;
-  onDragLeave: (e: React.DragEvent) => void;
-  onDrop: (e: React.DragEvent) => void;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragEnd: (e: React.DragEvent) => void;
   onClick: () => void;
 }) {
+  const drop = useDroppable({ id: `bench:${index}` });
+  const drag = useDraggable({ id: bp ? dragId("field", bp.player.id) : `bench-empty:${index}`, disabled: !bp });
+  const setRef = useMemo(() => combineRefs(drop.setNodeRef, drag.setNodeRef), [drop.setNodeRef, drag.setNodeRef]);
   return (
     <div
+      ref={setRef}
       className={[
         "sw-bench-slot",
-        dragOver && "is-drag-over",
+        drop.isOver && "is-drag-over",
         selected && "is-selected",
         isDraggingSource && "is-dragging-source",
       ].filter(Boolean).join(" ")}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      style={{ cursor: bp ? "grab" : "pointer" }}
       onClick={onClick}
-      draggable={!!bp}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      {...(bp ? drag.attributes : {})}
+      {...(bp ? drag.listeners : {})}
       aria-label={bp ? `Bench ${index + 1}: ${bp.player.name}` : `Bench slot ${index + 1} (empty)`}
     >
       {bp ? (
@@ -1555,15 +1561,12 @@ function BenchSlotView({
 }
 
 function PoolRow({
-  bp, placement, selected, isDraggingSource,
-  onDragStart, onDragEnd, onClick,
+  bp, placement, selected, isDraggingSource, onClick,
 }: {
   bp: BoughtPlayer;
   placement: Placement;
   selected: boolean;
   isDraggingSource: boolean;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragEnd: (e: React.DragEvent) => void;
   onClick: () => void;
 }) {
   const placed = placement.kind !== "pool";
@@ -1571,8 +1574,10 @@ function PoolRow({
   let placedLabel = "";
   if (placement.kind === "xi") placedLabel = `IN XI · ${placement.slotId.toUpperCase()}`;
   else if (placement.kind === "bench") placedLabel = `BENCH ${placement.index + 1}`;
+  const drag = useDraggable({ id: dragId("pool", bp.player.id) });
   return (
     <div
+      ref={drag.setNodeRef}
       className={[
         "sw-pool-row",
         placed && "is-placed",
@@ -1580,11 +1585,10 @@ function PoolRow({
         isDraggingSource && "is-dragging-source",
       ].filter(Boolean).join(" ")}
       style={{ color: accent }}
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
       onClick={onClick}
       aria-label={bp.player.name}
+      {...drag.attributes}
+      {...drag.listeners}
     >
       <div className="sw-pool-photo">
         <PlayerPhoto src={bp.player.photo_path} name={bp.player.name} />
@@ -1601,6 +1605,18 @@ function PoolRow({
         <span className="sw-pool-ovr">{bp.player.overall}</span>
         <span className="sw-pool-price">{fmtMoney(bp.price)}</span>
       </div>
+    </div>
+  );
+}
+
+// The scrollable buy list is also a drop target — drag a placed player back here
+// to return them to the pool. Must be its own component so useDroppable runs
+// inside the DndContext provider.
+function PoolList({ children }: { children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: "pool" });
+  return (
+    <div ref={setNodeRef} className={`sw-pool-list${isOver ? " is-drag-over" : ""}`}>
+      {children}
     </div>
   );
 }
@@ -1840,7 +1856,6 @@ export default function SquadBuilder({
 
   const [placement, setPlacement] = useState<Record<number, Placement>>(initialPlacement);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [filter, setFilter] = useState<FilterKey>("ALL");
 
@@ -1851,36 +1866,17 @@ export default function SquadBuilder({
     setSelectedId(null);
   }, [initialPlacement]);
 
-  // Pre-rendered drag ghosts, keyed by player id. setDragImage() snapshots its
-  // target synchronously, so building the ghost (and its <img>) inside
-  // onDragStart loses the race against image fetch+decode — first drag shows
-  // an empty disc. Instead we mount one ghost per player up-front (hidden
-  // off-screen below), which gives the browser time to fetch and decode the
-  // photo normally. On drag start we just hand the already-decoded element to
-  // setDragImage().
-  const ghostRefs = useRef<Record<number, HTMLDivElement | null>>({});
-
-  // Touch-device drag support. The squad-builder uses native HTML5 drag-and-drop
-  // (draggable + onDragStart/onDrop), which iPad Safari and Android Chrome do not
-  // fire reliably from touch input. mobile-drag-drop synthesizes drag events from
-  // touch events.
-  //
-  // forceApply: true — modern iPad Safari claims native drag support but its
-  //   touch handling is gated behind a ~750ms long-press and is buggy. Force the
-  //   polyfill on so touch behaves consistently across iOS/Android.
-  // holdToDrag: 200 — standard mobile pattern: a quick swipe scrolls the pool
-  //   list (pan-y on .sw-pool-row hands that to the browser), a deliberate
-  //   ~200ms press-and-hold starts a drag. This is how native iOS/Android
-  //   drag-and-drop reads to users.
-  // dragImageTranslateOverride — fixes the iOS quirk where the drag image lags
-  //   the finger when the page scrolls under it.
-  useEffect(() => {
-    polyfillTouchDnd({
-      forceApply: true,
-      holdToDrag: 200,
-      dragImageTranslateOverride: scrollBehaviourDragImageTranslateOverride,
-    });
-  }, []);
+  // Drag-and-drop is dnd-kit (pointer + touch sensors). The touch sensor uses a
+  // press-and-hold activation with movement tolerance, so a quick swipe scrolls
+  // the pool list while a deliberate long-press starts a drag — the behaviour
+  // mobile-drag-drop couldn't give us (it aborted the drag on ANY movement).
+  //   - MouseSensor: drag after a 4px move (so plain clicks still select).
+  //   - TouchSensor: 200ms hold, tolerating 8px of wiggle; beyond that it's a
+  //     scroll, not a drag.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+  );
 
   const buyById = useMemo(() => {
     const m = new Map<number, BoughtPlayer>();
@@ -1943,42 +1939,36 @@ export default function SquadBuilder({
     });
   }, []);
 
-  const handleDragStart = useCallback((bp: BoughtPlayer) => (e: React.DragEvent) => {
-    e.dataTransfer.setData("text/plain", String(bp.player.id));
-    e.dataTransfer.effectAllowed = "move";
-    const prebuilt = ghostRefs.current[bp.player.id];
-    const ghost = prebuilt ?? makeDragImage(bp.player.name, bp.player.photo_path);
-    e.dataTransfer.setDragImage(ghost, 20, 22);
-    if (!prebuilt) requestAnimationFrame(() => ghost.remove());
-    setDraggingId(bp.player.id);
-    setSelectedId(bp.player.id);
+  // Translate a droppable id ("xi:GK1" | "bench:2" | "pool") into a Placement.
+  const targetFromDroppable = useCallback((overId: string | number | undefined): Placement | null => {
+    if (overId == null) return null;
+    const id = String(overId);
+    if (id === "pool") return { kind: "pool" };
+    if (id.startsWith("xi:")) return { kind: "xi", slotId: id.slice(3) };
+    if (id.startsWith("bench:")) return { kind: "bench", index: Number(id.slice(6)) };
+    return null;
   }, []);
 
-  const handleDragEnd = useCallback((_e: React.DragEvent) => {
+  const handleDragStart = useCallback((e: DragStartEvent) => {
+    const id = playerIdFromDrag(e.active.id);
+    if (!Number.isFinite(id)) return;
+    setDraggingId(id);
+    setSelectedId(id);
+  }, []);
+
+  const handleDragEnd = useCallback((e: DragEndEvent) => {
     setDraggingId(null);
-    setDragOverKey(null);
-  }, []);
+    const id = playerIdFromDrag(e.active.id);
+    const target = targetFromDroppable(e.over?.id);
+    if (Number.isFinite(id) && buyById.has(id) && target) {
+      movePlayer(id, target);
+    }
+  }, [buyById, movePlayer, targetFromDroppable]);
 
-  const handleDragOver = useCallback((key: string) => (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (dragOverKey !== key) setDragOverKey(key);
-  }, [dragOverKey]);
-
-  const handleDragLeave = useCallback((key: string) => (_e: React.DragEvent) => {
-    if (dragOverKey === key) setDragOverKey(null);
-  }, [dragOverKey]);
-
-  const handleDrop = useCallback((target: Placement) => (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOverKey(null);
-    const raw = e.dataTransfer.getData("text/plain");
-    const id = Number(raw);
-    if (!id || !buyById.has(id)) return;
-    movePlayer(id, target);
-  }, [buyById, movePlayer]);
+  const handleDragCancel = useCallback(() => setDraggingId(null), []);
 
   const selectedBp = selectedId != null ? buyById.get(selectedId) ?? null : null;
+  const draggingBp = draggingId != null ? buyById.get(draggingId) ?? null : null;
   const selectedPlacement = selectedId != null ? placement[selectedId] ?? null : null;
   const selectedSlot =
     selectedPlacement?.kind === "xi"
@@ -2037,7 +2027,16 @@ export default function SquadBuilder({
   }, [onSubmit, placement, allFilled]);
 
   return (
-    <>
+    <DndContext
+      id="sw-squad-dnd"
+      sensors={sensors}
+      // closestCenter = magnetic, forgiving drops: the nearest slot always
+      // highlights and a release near it snaps in — no pixel-perfect aiming.
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
       <style>{tokens}</style>
       <div className="sw-sb">
         <div className="sw-top">
@@ -2113,7 +2112,6 @@ export default function SquadBuilder({
                     </svg>
                     {formationDef.slots.map((slot) => {
                       const bp = starterMap.get(slot.id);
-                      const dragKey = `xi:${slot.id}`;
                       const isSel = bp != null && selectedId === bp.player.id;
                       const isDragSrc = bp != null && draggingId === bp.player.id;
                       return (
@@ -2121,14 +2119,8 @@ export default function SquadBuilder({
                           key={slot.id}
                           slot={slot}
                           bp={bp}
-                          dragOver={dragOverKey === dragKey}
                           selected={isSel}
                           isDraggingSource={isDragSrc}
-                          onDragOver={handleDragOver(dragKey)}
-                          onDragLeave={handleDragLeave(dragKey)}
-                          onDrop={handleDrop({ kind: "xi", slotId: slot.id })}
-                          onDragStart={bp ? handleDragStart(bp) : () => {}}
-                          onDragEnd={handleDragEnd}
                           onClick={() => bp && setSelectedId(bp.player.id)}
                         />
                       );
@@ -2147,7 +2139,6 @@ export default function SquadBuilder({
                 <div className="sw-bench-strip">
                   {Array.from({ length: BENCH_SIZE }).map((_, i) => {
                     const bp = benchMap.get(i);
-                    const dragKey = `bench:${i}`;
                     const isSel = bp != null && selectedId === bp.player.id;
                     const isDragSrc = bp != null && draggingId === bp.player.id;
                     return (
@@ -2155,14 +2146,8 @@ export default function SquadBuilder({
                         key={i}
                         index={i}
                         bp={bp}
-                        dragOver={dragOverKey === dragKey}
                         selected={isSel}
                         isDraggingSource={isDragSrc}
-                        onDragOver={handleDragOver(dragKey)}
-                        onDragLeave={handleDragLeave(dragKey)}
-                        onDrop={handleDrop({ kind: "bench", index: i })}
-                        onDragStart={bp ? handleDragStart(bp) : () => {}}
-                        onDragEnd={handleDragEnd}
                         onClick={() => bp && setSelectedId(bp.player.id)}
                       />
                     );
@@ -2192,12 +2177,7 @@ export default function SquadBuilder({
                     </button>
                   ))}
                 </div>
-                <div
-                  className={`sw-pool-list${dragOverKey === "pool" ? " is-drag-over" : ""}`}
-                  onDragOver={handleDragOver("pool")}
-                  onDragLeave={handleDragLeave("pool")}
-                  onDrop={handleDrop({ kind: "pool" })}
-                >
+                <PoolList>
                   {filteredBuys.map((bp) => (
                     <PoolRow
                       key={bp.player.id}
@@ -2205,8 +2185,6 @@ export default function SquadBuilder({
                       placement={placement[bp.player.id] ?? { kind: "pool" }}
                       selected={selectedId === bp.player.id}
                       isDraggingSource={draggingId === bp.player.id}
-                      onDragStart={handleDragStart(bp)}
-                      onDragEnd={handleDragEnd}
                       onClick={() => setSelectedId(bp.player.id)}
                     />
                   ))}
@@ -2215,7 +2193,7 @@ export default function SquadBuilder({
                       no signings in this band.
                     </div>
                   )}
-                </div>
+                </PoolList>
               </div>
             </div>
           </div>
@@ -2228,61 +2206,13 @@ export default function SquadBuilder({
           />
         </div>
 
-        {/* Hidden drag-image ghosts — see ghostRefs above. Off-screen, so they
-            don't affect layout, but real DOM so the browser fetches+decodes the
-            photos before any drag begins. */}
-        <div aria-hidden style={{ position: "absolute", top: -2000, left: -2000, pointerEvents: "none" }}>
-          {bought.map((b) => (
-            <div
-              key={b.player.id}
-              ref={(el) => { ghostRefs.current[b.player.id] = el; }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "6px 14px 6px 6px",
-                background: "rgba(11,16,24,0.96)",
-                border: "1px solid rgba(242,237,224,0.65)",
-                borderRadius: 999,
-                color: "#F2EDE0",
-                fontFamily: "'Saira Condensed', 'Arial Narrow', sans-serif",
-                fontWeight: 800,
-                fontSize: 12,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                boxShadow: "0 10px 28px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.4)",
-                whiteSpace: "nowrap",
-                width: "fit-content",
-              }}
-            >
-              <div
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: "50%",
-                  flex: "0 0 auto",
-                  background: "radial-gradient(circle at 50% 35%, #FFFFFF 0%, #F2EDE0 45%, #DCD7C8 100%)",
-                  border: "1px solid rgba(0,0,0,0.3)",
-                  overflow: "hidden",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={b.player.photo_path}
-                  alt=""
-                  draggable={false}
-                  decoding="async"
-                  style={{ width: "110%", height: "110%", objectFit: "cover", objectPosition: "50% 25%" }}
-                />
-              </div>
-              <span>{b.player.name}</span>
-            </div>
-          ))}
-        </div>
       </div>
-    </>
+
+      {/* dnd-kit renders the drag ghost in a portal and positions it itself —
+          no setDragImage snapshot, so the photo is always present on first drag. */}
+      <DragOverlay dropAnimation={null}>
+        {draggingBp ? <DragGhost bp={draggingBp} /> : null}
+      </DragOverlay>
+    </DndContext>
   );
 }

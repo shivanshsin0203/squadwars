@@ -210,7 +210,6 @@ function useCountUp(target: number, active: boolean, reduced: boolean, durationM
 // ─────────────────────────── design tokens + landing styles ───────────────────────────
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
   html, body { margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
@@ -235,9 +234,9 @@ const tokens = `
     --hairline: rgba(255, 255, 255, 0.06);
     --hairline-strong: rgba(255, 255, 255, 0.10);
 
-    --font-display: 'Saira Condensed', 'Arial Narrow', sans-serif;
-    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --font-display: var(--font-saira), 'Arial Narrow', sans-serif;
+    --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains), ui-monospace, Menlo, Consolas, monospace;
 
     --r-sm: 4px; --r-md: 8px; --r-lg: 12px;
 
@@ -408,6 +407,14 @@ const tokens = `
   }
   .sw-spec-strip .v { font-family: var(--font-mono); font-weight: 700; color: var(--chalk-dim); letter-spacing: 0.04em; margin-left: 6px; }
   .sw-spec-strip .sep { color: var(--dim); font-family: var(--font-mono); font-size: 10px; }
+  .sw-device-note {
+    display: inline-flex; align-items: center; gap: 9px; margin-top: 16px;
+    font-family: var(--font-display); font-weight: 700; font-size: 10px;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim);
+    animation: sw-fade-in 0.7s ease-out 0.44s both;
+  }
+  .sw-device-note svg { color: var(--muted); flex: 0 0 auto; }
+  .sw-device-note b { color: var(--chalk-dim); font-weight: 700; }
   .sw-hero-monitor-wrap { animation: sw-fade-in 0.8s ease-out 0.45s both; }
 
   /* ── broadcast monitor frame ── */
@@ -1032,6 +1039,15 @@ export default function LandingPage() {
                   </span>
                   {error && <span className="sw-commit-err">{error}</span>}
                 </div>
+                <div className="sw-device-note">
+                  <svg width="30" height="16" viewBox="0 0 30 16" fill="none" aria-hidden>
+                    <rect x="0.75" y="1.25" width="17" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+                    <path d="M6 14.5h7M9.25 12.5v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    <rect x="21.5" y="0.75" width="8" height="14.5" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+                    <path d="M25.5 13h0.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                  <span>Currently playable on <b>PC &amp; tablet</b></span>
+                </div>
                 <div className="sw-spec-strip">
                   <span>TREASURY<span className="v">€1B</span></span>
                   <span className="sep">·</span>
@@ -1324,7 +1340,7 @@ export default function LandingPage() {
                   {busy ? "Entering the floor…" : "▶ Start game"}
                 </button>
                 <span className="sw-commit-helper">
-                  {health === "bad" ? "backend offline — start the server and refresh" : "free to play · no sign-up"}
+                  {health === "bad" ? "backend offline — start the server and refresh" : "free to play · no sign-up · PC & tablet"}
                 </span>
                 {error && <span className="sw-commit-err">{error}</span>}
               </div>

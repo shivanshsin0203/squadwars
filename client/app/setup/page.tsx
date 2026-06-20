@@ -181,7 +181,6 @@ const DEFAULT_FORMATION = "4-3-3";
 // ─────────────────────────── design tokens (mirror AuctionRoom) ───────────────────────────
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
 
   html, body { margin: 0; padding: 0; height: 100%; }
 
@@ -205,9 +204,9 @@ const tokens = `
     --hairline: rgba(255, 255, 255, 0.06);
     --hairline-strong: rgba(255, 255, 255, 0.10);
 
-    --font-display: 'Saira Condensed', 'Arial Narrow', sans-serif;
-    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --font-display: var(--font-saira), 'Arial Narrow', sans-serif;
+    --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains), ui-monospace, Menlo, Consolas, monospace;
 
     --r-sm: 4px;
     --r-md: 8px;
@@ -1161,13 +1160,14 @@ function MiniPitch({ formation, selected }: { formation: FormationData; selected
   );
 }
 
-function FormationTile({ formation, selected, onSelect }: {
-  formation: FormationData; selected: boolean; onSelect: () => void;
+function FormationTile({ formation, selected, onSelect, disabled }: {
+  formation: FormationData; selected: boolean; onSelect: () => void; disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       className={`sw-tile${selected ? " is-selected" : ""}`}
       aria-pressed={selected}
     >
@@ -1193,14 +1193,15 @@ function QueueCell({ cat, count }: { cat: Category; count: number }) {
 // ─────────────────────────── difficulty tile ───────────────────────────
 
 function DifficultyTile({
-  diff, selected, onSelect,
+  diff, selected, onSelect, disabled,
 }: {
-  diff: DifficultyCard; selected: boolean; onSelect: () => void;
+  diff: DifficultyCard; selected: boolean; onSelect: () => void; disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       className={`sw-diff-tile${selected ? " is-selected" : ""}`}
       aria-pressed={selected}
       aria-label={`${diff.tag} — ${diff.pundit} AI${diff.recommended ? " (recommended)" : ""}`}
@@ -1360,6 +1361,7 @@ export default function SetupPage() {
                     formation={f}
                     selected={f.name === selected}
                     onSelect={() => setSelected(f.name)}
+                    disabled={busy}
                   />
                 ))}
               </div>
@@ -1435,6 +1437,7 @@ export default function SetupPage() {
                     diff={d}
                     selected={d.name === difficulty}
                     onSelect={() => setDifficulty(d.name)}
+                    disabled={busy}
                   />
                 ))}
               </div>

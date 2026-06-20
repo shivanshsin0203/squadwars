@@ -246,7 +246,6 @@ function formatDuration(ms: number): string {
 // ─────────────────────────── styles ───────────────────────────
 
 const TOAST_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Saira+Condensed:wght@500;700;800&display=swap');
 
 .sw-toast-stack {
   position: fixed;
@@ -270,7 +269,7 @@ const TOAST_CSS = `
   animation: sw-toast-in 280ms cubic-bezier(0.4, 0, 0.2, 1) both;
   color: #EFEFEF;
   min-width: 260px;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
 }
 .sw-toast-error,
 .sw-toast-rate-limit,
@@ -302,7 +301,7 @@ const TOAST_CSS = `
   box-shadow: 0 0 8px rgba(242, 237, 224, 0.45);
 }
 .sw-toast-eyebrow {
-  font-family: 'Saira Condensed', system-ui, sans-serif;
+  font-family: var(--font-saira), system-ui, sans-serif;
   font-weight: 700;
   font-size: 10px;
   letter-spacing: 0.22em;
@@ -336,7 +335,7 @@ const TOAST_CSS = `
 }
 .sw-toast-countdown {
   margin-top: 8px;
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-jetbrains), ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
   font-size: 11px;
   font-weight: 500;

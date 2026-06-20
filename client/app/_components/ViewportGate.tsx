@@ -17,8 +17,8 @@
  *
  *   3. otherwise                              → PASS THROUGH.
  *      Renders children normally. Tablets in landscape are supported — the
- *      squad-builder uses mobile-drag-drop polyfill (see SquadBuilder.tsx) so
- *      touch DnD works, and the auction-room collapses at 1080px instead of
+ *      squad-builder uses dnd-kit (pointer + touch sensors, see SquadBuilder.tsx)
+ *      so touch drag works, and the auction-room collapses at 1080px instead of
  *      1180px so iPad Mini and iPad Pro 11" keep the 3-column broadcast layout.
  *
  * Once a user clicks "Continue anyway" the override sticks for the session.
@@ -160,7 +160,6 @@ export default function ViewportGate({
 }
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
   .sw-gate {
     --ink: #0B1018;
     --surface-1: #131A24;
@@ -181,7 +180,7 @@ const tokens = `
       radial-gradient(ellipse 70% 50% at 85% 100%, rgba(242, 237, 224, 0.03), transparent 70%),
       var(--ink);
     color: var(--text);
-    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
     min-height: 100vh;
     width: 100%;
     display: flex;
@@ -205,7 +204,7 @@ const tokens = `
     text-align: center;
   }
   .sw-gate-eyebrow {
-    font-family: 'Saira Condensed', sans-serif;
+    font-family: var(--font-saira), sans-serif;
     font-weight: 800;
     font-size: 10px;
     letter-spacing: 0.30em;
@@ -237,7 +236,7 @@ const tokens = `
     .sw-gate-rot-portrait { animation: none; }
   }
   .sw-gate-headline {
-    font-family: 'Saira Condensed', sans-serif;
+    font-family: var(--font-saira), sans-serif;
     font-weight: 800;
     font-size: 30px;
     letter-spacing: 0.04em;
@@ -264,7 +263,7 @@ const tokens = `
     align-items: center;
   }
   .sw-gate-btn-primary {
-    font-family: 'Saira Condensed', sans-serif;
+    font-family: var(--font-saira), sans-serif;
     font-weight: 800;
     letter-spacing: 0.16em;
     text-transform: uppercase;
@@ -296,7 +295,7 @@ const tokens = `
     border-top: 1px solid var(--hairline-strong);
   }
   .sw-gate-foot-eyebrow {
-    font-family: 'Saira Condensed', sans-serif;
+    font-family: var(--font-saira), sans-serif;
     font-weight: 700;
     font-size: 9px;
     letter-spacing: 0.30em;
@@ -304,7 +303,7 @@ const tokens = `
     text-transform: uppercase;
   }
   .sw-gate-foot-val {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-jetbrains), monospace;
     font-weight: 700;
     font-size: 11px;
     letter-spacing: 0.08em;

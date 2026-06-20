@@ -665,7 +665,6 @@ export default function ResultScreen({
 // ─────────────────────────── style tokens ───────────────────────────
 
 const tokens = `
-  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
   html, body { margin: 0; padding: 0; }
 
   .sw-result {
@@ -686,9 +685,9 @@ const tokens = `
     --dim: #5C6573;
     --hairline: rgba(255, 255, 255, 0.06);
     --hairline-strong: rgba(255, 255, 255, 0.10);
-    --font-display: 'Saira Condensed', 'Arial Narrow', sans-serif;
-    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --font-display: var(--font-saira), 'Arial Narrow', sans-serif;
+    --font-body: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains), ui-monospace, Menlo, Consolas, monospace;
     --r-sm: 4px; --r-md: 8px; --r-lg: 12px;
 
     background:
