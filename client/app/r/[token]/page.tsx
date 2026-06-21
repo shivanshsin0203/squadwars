@@ -257,7 +257,7 @@ export default async function SharePage({
       </div>
 
       <div className="sw-rp-foot">
-        SquadWars — a real-time 1v1 football auction · <Link href="/">squadwars.app</Link>
+        SquadWars — a real-time 1v1 football auction · <Link href="/">squadwars.online</Link>
       </div>
     </div>
   );
