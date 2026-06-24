@@ -1,4 +1,7 @@
 node_modules
 players.json
 .env
+.dev.vars
+.wrangler
+dist
 scripts

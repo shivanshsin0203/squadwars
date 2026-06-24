@@ -7,7 +7,7 @@
  * cookie or get 403.
  *
  *   POST /api/match               → issueSession(token) — Set-Cookie
- *   POST /api/match/:id/*         → requireSession      — validates cookie
+ *   POST /api/match/:id/*         → sessionMatches()     — validates cookie
  *
  * What this stops:
  *   - URL pasted into a different browser/device (cookie absent → 403)
@@ -15,77 +15,59 @@
  *
  * What this does NOT stop:
  *   - Two tabs in the same browser (cookies are shared by design)
- *   - Cookie stolen via XSS (httpOnly mitigates this for non-XHR access; CSP is the real fix)
+ *   - Cookie stolen via XSS (httpOnly mitigates non-XHR access; CSP is the real fix)
  *
- * Dev vs prod cookie attributes:
- *   - Dev (NODE_ENV != "production"): secure=false, sameSite=Lax
- *     Localhost is http: so Secure would suppress the cookie.
- *     localhost:3000 ↔ localhost:8787 are same-site under the eTLD+1 rule,
- *     so Lax is fine for the cross-port fetch the client does.
- *   - Prod: secure=true, sameSite=None — required if the deployed client
- *     and server live on different registrable domains (e.g. vercel.app +
- *     workers.dev). Browsers reject SameSite=None without Secure.
+ * Dev vs prod cookie attributes (the `prod` flag, derived from env.NODE_ENV):
+ *   - Dev (prod=false): secure=false, sameSite=Lax. Localhost is http: so Secure
+ *     would suppress the cookie; localhost:3000 ↔ :8787 are same-site so Lax works.
+ *   - Prod (prod=true): secure=true, sameSite=None — required because the deployed
+ *     client (squadwars.online) and worker (*.workers.dev / api.squadwars.online)
+ *     are different registrable domains. Browsers reject SameSite=None without Secure.
+ *
+ * This module is store-agnostic and reads no process.env — the caller (the
+ * MatchDO / worker) passes the expected token and the prod flag explicitly,
+ * because on Workers there is no ambient environment at module scope.
  */
 
-import type { Context, Next } from "hono";
+import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { getMatch } from "../store.js";
 
 export const SESSION_COOKIE_NAME = "sw_session";
+/** Header carrying the per-match token — the primary auth path (cookie is fallback).
+ *  Needed because the *.workers.dev cookie is third-party and blocked by many browsers. */
+export const SESSION_HEADER = "x-sw-session";
 
 const SESSION_MAX_AGE_S = 24 * 60 * 60; // 24h — matches stay playable for a day.
 
-function isProd(): boolean {
-  return process.env.NODE_ENV === "production" || process.env.NODE_ENV === "prod";
-}
-
 /**
- * Set the session cookie on a freshly-created match. Call from POST /api/match
- * right after the AuctionMatch is constructed and stored.
+ * Set the session cookie on a freshly-created match. Call from the create
+ * handler right after the AuctionMatch is constructed.
  */
-export function issueSession(c: Context, token: string): void {
+export function issueSession(c: Context, token: string, prod: boolean): void {
   setCookie(c, SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isProd(),
-    sameSite: isProd() ? "None" : "Lax",
+    secure: prod,
+    sameSite: prod ? "None" : "Lax",
     path: "/",
     maxAge: SESSION_MAX_AGE_S,
   });
 }
 
+/** The raw sw_session cookie value, if present. */
+export function readSessionCookie(c: Context): string | undefined {
+  return getCookie(c, SESSION_COOKIE_NAME);
+}
+
 /**
- * Validate that the caller's sw_session cookie matches the match's bound
- * token. Mounted as middleware in front of every /api/match/:id/* route.
- *
- * Failure responses:
- *   404 → matchId not found at all (don't leak "session mismatch" since the
- *         caller might just have a typo)
- *   403 → match exists but cookie is absent or wrong (someone else's match)
- *
- * Note: this middleware does its own getMatch() lookup outside the per-match
- * lock. That's safe because sessionToken is readonly — set once in the
- * constructor, never mutated. The route handler does a second getMatch()
- * inside withLock() for the actual mutation, but the small extra Map lookup
- * is cheap.
+ * True when the request's sw_session cookie matches the match's bound token.
+ * The caller is responsible for the match-not-found (404) case; this only
+ * answers the cookie question (403 vs allowed).
  */
-export async function requireSession(c: Context, next: Next): Promise<Response | void> {
-  const id = c.req.param("id");
-  if (!id) {
-    return c.json({ error: "missing_match_id" }, 400);
-  }
-  const m = getMatch(id);
-  if (!m) {
-    return c.json({ error: "match_not_found" }, 404);
-  }
+export function sessionMatches(c: Context, expectedToken: string): boolean {
+  // Header first (primary path; survives third-party-cookie blocking)…
+  const headerToken = c.req.header(SESSION_HEADER);
+  if (headerToken && headerToken === expectedToken) return true;
+  // …then the cookie (fallback for browsers that still send it).
   const cookieToken = getCookie(c, SESSION_COOKIE_NAME);
-  if (!cookieToken || cookieToken !== m.sessionToken) {
-    return c.json(
-      {
-        error: "session_mismatch",
-        message: "This match belongs to a different session. Start a new match.",
-      },
-      403
-    );
-  }
-  await next();
+  return !!cookieToken && cookieToken === expectedToken;
 }

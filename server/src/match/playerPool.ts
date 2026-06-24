@@ -4,21 +4,18 @@
  * Discipline (per user instruction): the per-match instance only stores the 33-player
  * QUEUE, never the full 300-player pool. The pool lives here, in module scope.
  *
- * If/when we move to a Durable Object, this file becomes a bundled asset import
- * inside the worker — same shape, different load mechanism.
+ * On Cloudflare Workers there is no filesystem — players.json is imported
+ * statically and the bundler (esbuild via Wrangler) inlines it into the Worker.
+ * The file must exist on disk at build time (it is gitignored; it is the build
+ * output of curate-players.ts).
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Category, Player } from "../types.js";
 import { getQueueCounts } from "../config.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // server/src/match/playerPool.ts  →  ../../players.json  →  server/players.json
-const POOL_PATH = path.resolve(__dirname, "../../players.json");
+import playersData from "../../players.json";
 
-const allPlayers: Player[] = JSON.parse(fs.readFileSync(POOL_PATH, "utf8"));
+const allPlayers = playersData as unknown as Player[];
 
 const pool: Record<Category, Player[]> = { GK: [], DEF: [], MID: [], ATT: [] };
 for (const p of allPlayers) {
@@ -26,7 +23,7 @@ for (const p of allPlayers) {
 }
 
 console.log(
-  `[POOL] loaded ${allPlayers.length} players from ${path.basename(POOL_PATH)} · ` +
+  `[POOL] loaded ${allPlayers.length} players (bundled players.json) · ` +
     `GK:${pool.GK.length} DEF:${pool.DEF.length} ` +
     `MID:${pool.MID.length} ATT:${pool.ATT.length}`
 );

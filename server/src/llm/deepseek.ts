@@ -28,21 +28,30 @@ import {
 } from "../schemas/llm.js";
 
 // ─────────────────────────── client ───────────────────────────
-
-const apiKey = process.env.AI_KEY;
-
-const client = apiKey
-  ? new OpenAI({ apiKey, baseURL: "https://api.deepseek.com" })
-  : null;
+//
+// On Cloudflare Workers there is no process.env at module-eval time — the
+// AI_KEY secret arrives per request via the `env` binding. So we lazily build
+// the OpenAI client the first time a key is supplied and memoize it (the key is
+// the same global secret for every match, so one cached client is correct, even
+// when many MatchDO instances share an isolate).
 
 const MODEL = "deepseek-chat"; // simple chat model, NOT reasoner
 
-if (!apiKey) {
-  console.warn(
-    "[LLM] AI_KEY not set — every match will use heuristic caps only"
+let cachedKey: string | undefined;
+let cachedClient: OpenAI | null = null;
+
+function getClient(apiKey: string | undefined): OpenAI | null {
+  if (apiKey === cachedKey) return cachedClient;
+  cachedKey = apiKey;
+  cachedClient = apiKey
+    ? new OpenAI({ apiKey, baseURL: "https://api.deepseek.com" })
+    : null;
+  console.log(
+    cachedClient
+      ? `[LLM] DeepSeek configured (model=${MODEL})`
+      : "[LLM] AI_KEY not set — every match will use heuristic caps only"
   );
-} else {
-  console.log(`[LLM] DeepSeek configured (model=${MODEL})`);
+  return cachedClient;
 }
 
 // Bumped from 12_000 after observing a cluster of DeepSeek tail-latency
@@ -379,8 +388,8 @@ You will receive your full snapshot in the user message as JSON. Reply with the 
 
 // ─────────────────────────── public API ───────────────────────────
 
-export function isLlmConfigured(): boolean {
-  return client !== null;
+export function isLlmConfigured(apiKey: string | undefined): boolean {
+  return getClient(apiKey) !== null;
 }
 
 // ─────────────────────────── pricing (DeepSeek deepseek-v4-flash, USD per 1M tokens) ───────────────────────────
@@ -419,8 +428,10 @@ export function costForUsage(
 }
 
 export async function planCaps(
-  req: LlmCapRequest
+  req: LlmCapRequest,
+  apiKey: string | undefined
 ): Promise<PlanCapsResult> {
+  const client = getClient(apiKey);
   if (!client) {
     throw new Error("AI_KEY not configured");
   }

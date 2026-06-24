@@ -65,6 +65,56 @@ export type AuctionMatchCtor = {
   matchId: string;
   formation: string;
   difficulty?: Difficulty;
+  /** DeepSeek API key (from env). Absent → heuristic caps only. */
+  aiKey?: string;
+  /** When present, rebuild an existing match from storage instead of creating a fresh one. */
+  restore?: SerializedMatch;
+};
+
+/**
+ * Plain, structured-clone-safe snapshot of a match for Durable Object storage.
+ * Everything mutable lives here; transient things (the in-flight AI-squad
+ * promise) are intentionally omitted and re-derived on demand.
+ */
+export type SerializedMatch = {
+  matchId: string;
+  formation: string;
+  difficulty: Difficulty;
+  createdAt: number;
+  sessionToken: string;
+  status: MatchStatus;
+  userBudget: number;
+  aiBudget: number;
+  userBought: BoughtPlayer[];
+  aiBought: BoughtPlayer[];
+  queue: Player[];
+  lotIndex: number;
+  forwardPlan: Array<[number, number]>;
+  llmLastSuccessAt: number | null;
+  llmCallCount: number;
+  llmCallsFailed: number;
+  llmPromptTokens: number;
+  llmCachedPromptTokens: number;
+  llmCompletionTokens: number;
+  llmTotalTokens: number;
+  llmTotalCostUsd: number;
+  llmTotalLatencyMs: number;
+  lotState: LotState | null;
+  aiSquadPlan: Squad | null;
+  userResultXI: Squad | null;
+  verdict: Verdict | null;
+};
+
+/**
+ * Side-effect hooks injected by the host runtime (the MatchDO). In the DO:
+ *   onPersist    → write the serialized match to ctx.storage
+ *   runBackground → ctx.waitUntil, so fire-and-forget LLM work (and its persist)
+ *                   completes before the DO can go dormant.
+ * Unset (e.g. in tests) → persist is a no-op and background work just runs.
+ */
+export type MatchHooks = {
+  onPersist?: () => void;
+  runBackground?: (p: Promise<unknown>) => void;
 };
 
 export type BidResult =
@@ -88,6 +138,11 @@ export class AuctionMatch {
   /** Per-match session token bound to the issuing browser via a cookie.
    *  Required on every /api/match/:id/* request. Never sent in toClientDTO. */
   readonly sessionToken: string;
+  /** DeepSeek key threaded from env (no process.env on Workers). Not persisted. */
+  readonly aiKey: string | undefined;
+
+  /** Host-injected side-effect hooks (persistence + background scheduling). */
+  private hooks: MatchHooks = {};
 
   // ─────── top-level lifecycle ───────
   status: MatchStatus = "in_progress";
@@ -133,6 +188,46 @@ export class AuctionMatch {
   verdict: Verdict | null = null;
 
   constructor(opts: AuctionMatchCtor) {
+    this.aiKey = opts.aiKey;
+
+    // ── Restore path: rebuild an existing match from DO storage. No new queue,
+    //    no new session token, no create-time LLM seed. ──
+    if (opts.restore) {
+      const r = opts.restore;
+      this.matchId = r.matchId;
+      this.formation = r.formation;
+      this.difficulty = r.difficulty;
+      this.createdAt = r.createdAt;
+      this.sessionToken = r.sessionToken;
+      this.queue = r.queue;
+      this.status = r.status;
+      this.userBudget = r.userBudget;
+      this.aiBudget = r.aiBudget;
+      this.userBought = r.userBought;
+      this.aiBought = r.aiBought;
+      this.lotIndex = r.lotIndex;
+      this.forwardPlan = new Map(r.forwardPlan);
+      this.llmLastSuccessAt = r.llmLastSuccessAt;
+      this.llmCallCount = r.llmCallCount;
+      this.llmCallsFailed = r.llmCallsFailed;
+      this.llmPromptTokens = r.llmPromptTokens;
+      this.llmCachedPromptTokens = r.llmCachedPromptTokens;
+      this.llmCompletionTokens = r.llmCompletionTokens;
+      this.llmTotalTokens = r.llmTotalTokens;
+      this.llmTotalCostUsd = r.llmTotalCostUsd;
+      this.llmTotalLatencyMs = r.llmTotalLatencyMs;
+      this.lotState = r.lotState;
+      this.aiSquadPlan = r.aiSquadPlan;
+      this.userResultXI = r.userResultXI;
+      this.verdict = r.verdict;
+      console.log(
+        `[MATCH:restore] id=${this.matchId} status=${this.status} lotIndex=${this.lotIndex}/${this.queue.length} ` +
+          `forwardPlan=${this.forwardPlan.size} hasLot=${this.lotState !== null}`
+      );
+      return;
+    }
+
+    // ── Fresh-create path ──
     this.matchId = opts.matchId;
     this.formation = opts.formation;
     this.difficulty = opts.difficulty ?? DEFAULT_DIFFICULTY;
@@ -459,6 +554,7 @@ export class AuctionMatch {
       lotsTotal: this.queue.length,
       lotsDone: this.lotIndex, // = lots already resolved
       lotState: this.lotState ? this.toClientLotDTO(this.lotState) : null,
+      serverNow: Date.now(), // for client clock-skew correction (see MatchStateDTO)
       result: this.buildResultPayload(),
     };
   }
@@ -599,7 +695,7 @@ export class AuctionMatch {
    * by an LLM outage.
    */
   async seedForwardPlan(): Promise<void> {
-    if (!isLlmConfigured()) {
+    if (!isLlmConfigured(this.aiKey)) {
       console.log(
         `[MATCH:llm] id=${this.matchId} seedForwardPlan SKIPPED — LLM not configured (heuristic only)`
       );
@@ -617,15 +713,19 @@ export class AuctionMatch {
    * if not, that lot uses the heuristic.
    */
   private kickoffAsyncCapPlanning(): void {
-    if (!isLlmConfigured()) return;
+    if (!isLlmConfigured(this.aiKey)) return;
     console.log(
       `[MATCH:llm] id=${this.matchId} ASYNC kickoff after lot transition (lotIndex=${this.lotIndex})`
     );
-    void this.runCapPlanning().catch((err) => {
-      console.log(
-        `[MATCH:llm] id=${this.matchId} async run CRASHED: ${(err as Error).message}`
-      );
-    });
+    // runBackground → ctx.waitUntil in the DO, so this (and its trailing
+    // persist) completes before the DO can go dormant.
+    this.runBackground(
+      this.runCapPlanning().catch((err) => {
+        console.log(
+          `[MATCH:llm] id=${this.matchId} async run CRASHED: ${(err as Error).message}`
+        );
+      })
+    );
   }
 
   /**
@@ -804,7 +904,7 @@ export class AuctionMatch {
     this.llmInFlight = true;
     this.llmCallCount += 1;
     try {
-      const { caps, usage } = await planCaps(req);
+      const { caps, usage } = await planCaps(req, this.aiKey);
       for (const [playerId, cap] of caps) {
         this.forwardPlan.set(playerId, cap);
       }
@@ -826,6 +926,9 @@ export class AuctionMatch {
       );
     } finally {
       this.llmInFlight = false;
+      // Persist the merged caps + usage counters (this runs after the request
+      // has returned, so it relies on the DO being kept alive via waitUntil).
+      this.persist();
     }
   }
 
@@ -862,12 +965,15 @@ export class AuctionMatch {
     }
     console.log(`[MATCH:ai-xi] id=${this.matchId} KICKOFF rosterSize=${this.aiBought.length}`);
     const diffSpec = getDifficultySpec(this.difficulty);
-    this.aiSquadPlanPromise = planAiSquad({
-      matchId: this.matchId,
-      formation: this.formation,
-      roster: this.aiBought,
-      persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
-    })
+    this.aiSquadPlanPromise = planAiSquad(
+      {
+        matchId: this.matchId,
+        formation: this.formation,
+        roster: this.aiBought,
+        persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
+      },
+      this.aiKey
+    )
       .then((res) => {
         this.aiSquadPlan = res.squad;
         // Roll usage into the match-level accumulators so /debug reflects total cost.
@@ -882,6 +988,7 @@ export class AuctionMatch {
         console.log(
           `[MATCH:ai-xi] id=${this.matchId} DONE source=${res.source} xi=${res.squad.xi.length} bench=${res.squad.bench.length}`
         );
+        this.persist();
         return res.squad;
       })
       .catch((err) => {
@@ -892,8 +999,11 @@ export class AuctionMatch {
         // missing AI squad as "all categories lost" rather than 500'ing.
         const empty: Squad = { xi: [], bench: [] };
         this.aiSquadPlan = empty;
+        this.persist();
         return empty;
       });
+    // Keep the DO alive until the background pick (+ its persist) finishes.
+    this.runBackground(this.aiSquadPlanPromise);
   }
 
   /**
@@ -960,16 +1070,19 @@ export class AuctionMatch {
     const aiTotalSpent = this.aiBought.reduce((a, b) => a + b.price, 0);
 
     // Prose pass.
-    const prose = await writeVerdictProse({
-      matchId: this.matchId,
-      formation: this.formation,
-      persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
-      verdict,
-      userBought: this.userBought,
-      aiBought: this.aiBought,
-      userTotalSpent,
-      aiTotalSpent,
-    });
+    const prose = await writeVerdictProse(
+      {
+        matchId: this.matchId,
+        formation: this.formation,
+        persona: { name: diffSpec.personaName, style: diffSpec.personaStyle },
+        verdict,
+        userBought: this.userBought,
+        aiBought: this.aiBought,
+        userTotalSpent,
+        aiTotalSpent,
+      },
+      this.aiKey
+    );
     verdict.report = prose.report;
     verdict.roast = prose.roast;
 
@@ -1066,9 +1179,59 @@ export class AuctionMatch {
 
   // ─────────────────────────── persistence boundary ───────────────────────────
 
-  /** Today: no-op. Under DO: `await this.state.storage.put(...)`. */
+  /**
+   * Signal that mutable state changed. The host (MatchDO) wires onPersist to
+   * write the serialized match into ctx.storage. With no host (tests) it's a no-op.
+   */
   protected persist(): void {
-    // intentionally empty — single line to swap when wrapping in a DO
+    this.hooks.onPersist?.();
+  }
+
+  /** Wire host side-effects (persistence + background scheduling). Call once after construction. */
+  setHooks(hooks: MatchHooks): void {
+    this.hooks = hooks;
+  }
+
+  /**
+   * Run fire-and-forget work (async LLM planning) through the host so the DO
+   * stays alive until it — and its trailing persist() — finish. Without a host,
+   * the promise just runs detached.
+   */
+  private runBackground(p: Promise<unknown>): void {
+    if (this.hooks.runBackground) this.hooks.runBackground(p);
+    else void p;
+  }
+
+  /** Structured-clone-safe snapshot for DO storage. Mirrors the restore path in the ctor. */
+  serialize(): SerializedMatch {
+    return {
+      matchId: this.matchId,
+      formation: this.formation,
+      difficulty: this.difficulty,
+      createdAt: this.createdAt,
+      sessionToken: this.sessionToken,
+      status: this.status,
+      userBudget: this.userBudget,
+      aiBudget: this.aiBudget,
+      userBought: this.userBought,
+      aiBought: this.aiBought,
+      queue: this.queue,
+      lotIndex: this.lotIndex,
+      forwardPlan: Array.from(this.forwardPlan.entries()),
+      llmLastSuccessAt: this.llmLastSuccessAt,
+      llmCallCount: this.llmCallCount,
+      llmCallsFailed: this.llmCallsFailed,
+      llmPromptTokens: this.llmPromptTokens,
+      llmCachedPromptTokens: this.llmCachedPromptTokens,
+      llmCompletionTokens: this.llmCompletionTokens,
+      llmTotalTokens: this.llmTotalTokens,
+      llmTotalCostUsd: this.llmTotalCostUsd,
+      llmTotalLatencyMs: this.llmTotalLatencyMs,
+      lotState: this.lotState,
+      aiSquadPlan: this.aiSquadPlan,
+      userResultXI: this.userResultXI,
+      verdict: this.verdict,
+    };
   }
 
   // ─────────────────────────── diagnostics ───────────────────────────

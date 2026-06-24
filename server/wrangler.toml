@@ -1,0 +1,46 @@
+# SquadWars backend — Cloudflare Worker + Durable Object + KV.
+#
+# Local dev:   npm run dev       (wrangler dev — emulates DO + KV locally)
+# Deploy:      npm run deploy    (wrangler deploy)
+#
+# Secrets (NOT here — set once with `wrangler secret put NAME`):
+#   AI_KEY     — DeepSeek API key
+#   DEBUG_KEY  — optional, gates /:id/debug in prod
+# Local secrets live in .dev.vars (gitignored).
+
+name = "squadwars-server"
+main = "src/worker.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ── Durable Object: one instance per matchId, holds the live AuctionMatch ──
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "MatchDO"
+
+# SQLite-backed DO class — REQUIRED for the Workers FREE plan.
+# (The old key-value backend / `new_classes` needs the paid plan.)
+# NOTE: a class's storage backend cannot be changed after first deploy.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchDO"]
+
+# ── KV: used only by the create-match rate limiter (low write volume) ──
+[[kv_namespaces]]
+binding = "KV"
+id = "9eb54efbf0644817bfd853449f8d61c3"
+
+# ── Native rate-limiting binding: global catch-all (no KV writes) ──
+# namespace_id is just a unique integer string per account; period must be 10 or 60.
+[[ratelimits]]
+name = "RATE_LIMIT"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 300
+period = 60
+
+# ── Plain (non-secret) vars. Overridden locally by .dev.vars during `wrangler dev`. ──
+[vars]
+CORS_ORIGIN = "https://squadwars.online,https://www.squadwars.online"
+NODE_ENV = "production"

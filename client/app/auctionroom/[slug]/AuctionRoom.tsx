@@ -8,6 +8,7 @@ import SquadBuilder from "../../squad-builder/SquadBuilder";
 import ResultScreen from "../../squad-builder/ResultScreen";
 import { useToast } from "../../_components/Toast";
 import { apiFetch, ApiError, toastFromApiError } from "../../_lib/apiClient";
+import { getSessionToken, SESSION_HEADER } from "../../_lib/session";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -257,6 +258,16 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
 
   const stateRef = useRef<MatchStateDTO | null>(null);
   const endedLotsRef = useRef<Set<number>>(new Set());
+  // Clock skew correction: the auction timer compares the server's absolute
+  // `expiresAt` against the browser clock. Those two clocks can differ in prod
+  // (locally they're the same machine, which is why this never showed in dev) —
+  // a fast or slow browser clock makes the countdown wrong and the /lot-end
+  // trigger fire too early (server 425s → lot stuck) or never. Every response
+  // carries `serverNow`; we keep the offset (server − client) and add it to
+  // Date.now() wherever we time against expiresAt. Network latency leaves a
+  // ~100ms residual, which is well inside the server's 1s lot-end tolerance.
+  const clockOffsetRef = useRef<number>(0);
+  const serverNow = useCallback(() => Date.now() + clockOffsetRef.current, []);
 
   useEffect(() => {
     stateRef.current = state;
@@ -269,10 +280,24 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
   const api = useCallback(
     async (path: string, init?: RequestInit) => {
       try {
-        return await apiFetch<MatchStateDTO | LotEndResp>(
+        // Auth via the per-match token header (cookie is an unreliable
+        // third-party fallback on *.workers.dev). Token was stored at create.
+        const token = getSessionToken(matchId);
+        const res = await apiFetch<MatchStateDTO | LotEndResp>(
           `${BACKEND_URL}/api/match/${matchId}${path}`,
-          init
+          {
+            ...init,
+            headers: {
+              ...(init?.headers ?? {}),
+              ...(token ? { [SESSION_HEADER]: token } : {}),
+            },
+          }
         );
+        // Re-sync the server↔client clock offset on every response.
+        if (res && typeof (res as MatchStateDTO).serverNow === "number") {
+          clockOffsetRef.current = (res as MatchStateDTO).serverNow - Date.now();
+        }
+        return res;
       } catch (err) {
         // Critical statuses → toast immediately, so the user sees the
         // rate-limit countdown / session-expired notice / network drop even
@@ -418,7 +443,7 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
       const cur = stateRef.current;
       const curLot = cur?.lotState;
       if (!curLot || curLot.lotIndex !== lotIdx) return;
-      const msLeft = curLot.expiresAt - Date.now();
+      const msLeft = curLot.expiresAt - serverNow();
       if (msLeft <= 0 && !endedLotsRef.current.has(lotIdx)) {
         endedLotsRef.current.add(lotIdx);
         callLotEnd(lotIdx);
@@ -519,7 +544,7 @@ export default function AuctionRoom({ matchId }: { matchId: string }) {
   }
 
   const userCounts = countByCategory(state.user.bought.map((b) => b.player.category));
-  const msLeft = Math.max(0, lot.expiresAt - Date.now());
+  const msLeft = Math.max(0, lot.expiresAt - serverNow());
   const lowTime = msLeft < 5000;
 
   return (
@@ -595,9 +620,8 @@ function PlayerPhoto({
   const knownMissing = !src || src.includes("placeholder");
   const [failed, setFailed] = useState(knownMissing);
 
-  // Reset the failed flag when src changes — the bid arena reuses one
-  // PlayerPhoto instance across lots; without this, a missing image on lot N
-  // sticks `failed=true` and every later lot would render initials too.
+  // Reset the failed flag when src changes — one PlayerPhoto instance is reused
+  // across lots/cards, so a missing image on player N must not stick to N+1.
   useEffect(() => {
     setFailed(!src || src.includes("placeholder"));
   }, [src]);
@@ -621,6 +645,14 @@ function PlayerPhoto({
     flex: "0 0 auto",
   };
 
+  const initialsStyle: React.CSSProperties = {
+    fontFamily: "var(--font-display)",
+    fontWeight: 800,
+    fontSize: Math.max(10, Math.round(size * 0.42)),
+    letterSpacing: "0.04em",
+    color: "#3F3A2E",
+  };
+
   if (failed) {
     return (
       <div
@@ -629,11 +661,7 @@ function PlayerPhoto({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontFamily: "var(--font-display)",
-          fontWeight: 800,
-          fontSize: Math.max(10, Math.round(size * 0.42)),
-          letterSpacing: "0.04em",
-          color: "#3F3A2E",
+          ...initialsStyle,
         }}
       >
         {initials}
@@ -642,15 +670,43 @@ function PlayerPhoto({
   }
 
   return (
-    /* eslint-disable-next-line @next/next/no-img-element */
-    <img
-      src={src}
-      alt={name}
-      width={size}
-      height={size}
-      style={{ ...shared, objectFit: "cover" }}
-      onError={() => setFailed(true)}
-    />
+    <div
+      style={{
+        ...shared,
+        position: "relative",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {/* Initials sit BEHIND the photo as a placeholder. While the image is still
+          loading it's transparent so the initials show through; once it paints it
+          covers them. We deliberately do NOT gate visibility on an onLoad state —
+          cached images (e.g. a bought player already shown in the dossier) often
+          never fire onLoad, which previously left the photo stuck invisible on
+          tablet/laptop. */}
+      <span style={{ ...initialsStyle, position: "absolute" }}>{initials}</span>
+      {/* key={src} → fresh <img> per player so the prior photo can't linger. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={src}
+        src={src}
+        alt={name}
+        width={size}
+        height={size}
+        fetchPriority="high"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: size,
+          height: size,
+          borderRadius: rounded,
+          objectFit: "cover",
+        }}
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 }
 

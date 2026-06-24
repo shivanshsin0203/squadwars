@@ -39,16 +39,26 @@ import {
 } from "../schemas/llm.js";
 
 // ─────────────────────────── shared client ───────────────────────────
+// Lazily built from the per-request AI_KEY (no process.env on Workers) and
+// memoized — see the same pattern + rationale in deepseek.ts.
 
-const apiKey = process.env.AI_KEY;
-const client = apiKey
-  ? new OpenAI({ apiKey, baseURL: "https://api.deepseek.com" })
-  : null;
 const MODEL = "deepseek-chat";
 const LLM_TIMEOUT_MS = 20_000;
 
-export function isSquadLlmConfigured(): boolean {
-  return client !== null;
+let cachedKey: string | undefined;
+let cachedClient: OpenAI | null = null;
+
+function getClient(apiKey: string | undefined): OpenAI | null {
+  if (apiKey === cachedKey) return cachedClient;
+  cachedKey = apiKey;
+  cachedClient = apiKey
+    ? new OpenAI({ apiKey, baseURL: "https://api.deepseek.com" })
+    : null;
+  return cachedClient;
+}
+
+export function isSquadLlmConfigured(apiKey: string | undefined): boolean {
+  return getClient(apiKey) !== null;
 }
 
 export type SquadLlmUsage = {
@@ -78,7 +88,9 @@ async function callLLM(opts: {
   userPrompt: string;
   temperature: number;
   maxTokens: number;
+  apiKey: string | undefined;
 }): Promise<{ content: string; usage: SquadLlmUsage }> {
+  const client = getClient(opts.apiKey);
   if (!client) throw new Error("AI_KEY not configured");
 
   const t0 = Date.now();
@@ -211,7 +223,8 @@ function asSlotForLlm(s: SlotDef) {
 }
 
 export async function planAiSquad(
-  req: PlanSquadRequest
+  req: PlanSquadRequest,
+  apiKey: string | undefined
 ): Promise<PlanSquadResult> {
   const slots = getSlots(req.formation);
   const roster = req.roster.slice();
@@ -228,7 +241,7 @@ export async function planAiSquad(
     };
   }
 
-  if (!isSquadLlmConfigured()) {
+  if (!isSquadLlmConfigured(apiKey)) {
     console.log(`[LLM:ai-xi] id=${req.matchId} NOT-CONFIGURED — greedy fallback`);
     return { squad: greedyPickSquad(slots, roster), usage: zeroUsage(), source: "fallback" };
   }
@@ -255,6 +268,7 @@ export async function planAiSquad(
         tag: `ai-xi:try${attempt}`,
         systemPrompt: SQUAD_SYSTEM_PROMPT,
         userPrompt,
+        apiKey,
         // 1.6 was too hot for what is really a constrained-optimisation problem;
         // the model produced wrong-category placements (e.g. Pedri at RCB) because
         // the −45 OVR penalty rule was treated like creative guidance. 0.6 keeps
@@ -585,8 +599,11 @@ Schema:
 }
 Empty / missing / wrong sentence count → deterministic fallback fires and your voice is lost.`;
 
-export async function writeVerdictProse(req: ProseRequest): Promise<ProseResult> {
-  if (!isSquadLlmConfigured()) {
+export async function writeVerdictProse(
+  req: ProseRequest,
+  apiKey: string | undefined
+): Promise<ProseResult> {
+  if (!isSquadLlmConfigured(apiKey)) {
     console.log(`[LLM:verdict] id=${req.matchId} NOT-CONFIGURED — canned prose`);
     return { ...buildFallbackProse(req), usage: zeroUsage(), source: "fallback" };
   }
@@ -634,6 +651,7 @@ export async function writeVerdictProse(req: ProseRequest): Promise<ProseResult>
         tag: `verdict:try${attempt}`,
         systemPrompt: PROSE_SYSTEM_PROMPT,
         userPrompt,
+        apiKey,
         // Hotter than the squad-pick call because this IS creative writing, but
         // 1.4 was loose enough to let the model invent a fake player ("Hughes"
         // in match -88lgtb12R). 0.9 keeps voice while keeping it tethered.

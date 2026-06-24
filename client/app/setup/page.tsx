@@ -6,6 +6,7 @@ import Link from "next/link";
 import ViewportGate from "../_components/ViewportGate";
 import { useToast } from "../_components/Toast";
 import { apiFetch, ApiError, toastFromApiError } from "../_lib/apiClient";
+import { storeSessionToken } from "../_lib/session";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8787";
@@ -17,6 +18,7 @@ type CreateMatchResp = {
   status: string;
   lotsTotal: number;
   llmSeeded?: boolean;
+  sessionToken?: string;
 };
 
 // ─────────────────────────── difficulty data (mirrors server DIFFICULTIES) ───────────────────────────
@@ -1271,6 +1273,9 @@ export default function SetupPage() {
         `[CLIENT:createMatch] ${ms}ms → matchId=${data.matchId} formation=${data.formation} ` +
           `difficulty=${data.difficulty ?? "?"} llmSeeded=${data.llmSeeded}`
       );
+      // Persist the per-match token so the auction room can auth via header
+      // (the *.workers.dev cookie is third-party and blocked by some browsers).
+      if (data.sessionToken) storeSessionToken(data.matchId, data.sessionToken);
       router.push(`/auctionroom/${encodeURIComponent(data.matchId)}`);
     } catch (e) {
       console.error("[CLIENT:createMatch] FAILED", e);

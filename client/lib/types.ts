@@ -131,6 +131,9 @@ export type MatchStateDTO = {
   lotsTotal: number;
   lotsDone: number;
   lotState: LotStateDTO | null;
+  /** Server wall-clock at response time (ms) — used to correct browser↔server
+   *  clock skew when timing the countdown / lot-end against `lotState.expiresAt`. */
+  serverNow: number;
   /** Populated when status === "result"; null otherwise. */
   result: ResultPayload | null;
 };

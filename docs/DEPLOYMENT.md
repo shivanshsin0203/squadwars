@@ -4,9 +4,21 @@
 > what's left, so a brand-new session (or a human) can pick up with zero prior
 > context. Written 2026-06-20.
 >
-> **One-line status:** Frontend is **live** on Vercel at `https://squadwars.online`.
-> Backend is **NOT deployed** anywhere yet — that's the remaining big task, and
-> the target is **Cloudflare Workers + Durable Objects + KV**.
+> **🟢 UPDATE 2026-06-23 — BACKEND IS NOW DEPLOYED.** Frontend and backend are
+> both live and wired together. The backend runs on **Cloudflare Workers +
+> SQLite-backed Durable Objects + KV**, entirely on the **free tier** (the old
+> "DO needs the $5 paid plan" note below is obsolete — that was only true of the
+> legacy key-value DO backend; SQLite-backed DOs are free). See the as-built
+> record in **§12** at the bottom — read that first; the sections below are the
+> original pre-deploy plan, kept for context.
+>
+> - Backend URL: `https://squadwars-server.singhshivansh12may.workers.dev`
+> - Local dev is now `npm run dev` → `wrangler dev` (emulates DO + KV); the old
+>   Node entry (`index.ts`/`store.ts`) was deleted — Workers is the only runtime.
+>
+> **Original one-line status (2026-06-20):** Frontend is **live** on Vercel at
+> `https://squadwars.online`. Backend is **NOT deployed** anywhere yet — that's
+> the remaining big task, target **Cloudflare Workers + Durable Objects + KV**.
 
 ---
 
@@ -15,10 +27,10 @@
 | Piece | Status | Host | Notes |
 |---|---|---|---|
 | Domain `squadwars.online` | ✅ live | registrar → Vercel | Acquired 2026-06-20. DNS pointed at Vercel, HTTPS auto-provisioned. |
-| Frontend (Next.js 16 client) | ✅ deployed | Vercel (CLI) | Landing, SEO/OG, share pages all live & static-renderable without backend. |
-| Backend (Hono server) | ❌ **NOT deployed** | — (local only) | In-memory Map store. Target = **Cloudflare Workers + DO + KV**. |
-| End-to-end prod play-through | ❌ not yet possible | — | Blocked on backend deploy. This is the launch gate (see §7). |
-| Cross-origin auth (cookie/CORS) in prod | ⚠️ needs config | backend env | Code is correct; needs prod env vars when backend ships (see §5.3, §6.2). |
+| Frontend (Next.js 16 client) | ✅ deployed | Vercel (CLI) | Landing, SEO/OG, share pages all live & static-renderable without backend. `NEXT_PUBLIC_BACKEND_URL` now set → worker. |
+| Backend (Hono → Worker) | ✅ **deployed** 2026-06-23 | Cloudflare Workers + DO + KV | `squadwars-server.singhshivansh12may.workers.dev`. SQLite-backed DO per match; free tier. See §12. |
+| End-to-end prod play-through | ⚠️ curl-verified; browser pass pending | — | Worker smoke (create/session/start/bid/lot-end) all green via curl. Final human browser pass = §8 (the launch gate). |
+| Cross-origin auth (cookie/CORS) in prod | ✅ configured | worker vars + secret | `NODE_ENV=production` (cookie SameSite=None;Secure), `CORS_ORIGIN=https://squadwars.online`, `AI_KEY` secret set. Verified ACAO+credentials echo correctly. |
 
 **The single most important fact:** the backend holds **all match state in an
 in-memory `Map`** (`server/src/store.ts`). It cannot go on Vercel/serverless —
@@ -469,5 +481,80 @@ If steps pass on both devices, the product is launch-ready.
 
 ---
 
-*Last updated 2026-06-20. If you change deploy config, env vars, or the backend
-host plan, update this file.*
+---
+
+## 12. AS-BUILT — backend deploy (2026-06-23)
+
+The §7 plan was executed with one platform correction: **DOs are free on the
+Workers free plan when SQLite-backed** (`new_sqlite_classes` migration). No paid
+plan was needed. KV + Workers free tiers cover the rest.
+
+### 12.1 Topology as shipped
+```
+browser ─https─▶ squadwars.online (Vercel, Next.js)
+        ─https─▶ squadwars-server.singhshivansh12may.workers.dev
+                   ├─ worker.ts            (front door: CORS, global rate limit, routing)
+                   └─ MatchDO  (one SQLite-backed Durable Object per matchId)
+                        ├─ holds one AuctionMatch, persisted to ctx.storage
+                        ├─ self-deletes 24h after creation (storage alarm)
+                        └─ per-match rate limiting in-memory
+                   uses: KV (create-match limiter only), RATE_LIMIT binding (global)
+```
+
+### 12.2 File changes
+- **New:** `src/worker.ts`, `src/do/MatchDO.ts`, `src/env.ts`,
+  `src/middleware/{kvRateLimit,doRateLimit,clientIp}.ts`, `wrangler.toml`, `.dev.vars`.
+- **Modified:** `match/AuctionMatch.ts` (added `serialize()` + restore-from-storage
+  ctor branch + `setHooks` for persist/waitUntil + threaded `aiKey`);
+  `llm/{deepseek,squadBuilder}.ts` (lazy `getClient(apiKey)` — no module-scope
+  `process.env`); `match/playerPool.ts` (static JSON import, no `fs`);
+  `middleware/session.ts` (store-agnostic, `prod` flag passed in); `package.json`
+  (`dev`→`wrangler dev`, `deploy`→`wrangler deploy`); `tsconfig.json`
+  (workers-types, exclude scratch).
+- **Deleted:** `src/index.ts`, `src/store.ts`, `src/routes/match.ts`,
+  `src/middleware/rateLimit.ts` (the Node entry + in-memory Map + old hono-rate-limiter).
+
+### 12.3 Persistence & lifecycle
+- `AuctionMatch.persist()` → `ctx.storage.put("match", serialize())`. The DO
+  hydrates via `blockConcurrencyWhile` on cold start (restore ctor branch).
+  **Verified:** killing the local runtime and re-reading a match returned its
+  state intact (`lotsDone` preserved) — state survives restarts now.
+- Fire-and-forget LLM planning is wrapped in `ctx.waitUntil` so the DO stays
+  alive until the work + its persist complete.
+- **24h TTL:** `ctx.storage.setAlarm(createdAt + 24h)`; `alarm()` calls
+  `deleteAll()`. A match naturally finishes in <1h, so this is hygiene/cleanup.
+
+### 12.4 Rate limiting (hybrid — chosen to fit the free tier)
+KV free tier allows only ~1,000 writes/day, so KV is used for **just** the
+create-match limiter (rare, cost-critical, needs a long window):
+- **create-match** → KV fixed-window per IP, **4 / 2h** in prod (`kvRateLimit.ts`).
+  Fails open on KV error.
+- **bid/ai-fire/lot-end/start/result** → in-DO in-memory limiter (`doRateLimit.ts`),
+  same tiers as the old table; correct because each DO is one long-lived isolate.
+- **global catch-all** → native Workers `[[ratelimits]]` binding, **300 / 60s** per IP.
+
+### 12.5 Config / commands (reference)
+```
+cd server
+npm run dev            # wrangler dev (local DO+KV emulation; uses .dev.vars)
+npm run dry-run        # wrangler deploy --dry-run (bundle check)
+npm run deploy         # wrangler deploy
+wrangler secret put AI_KEY      # already set
+wrangler kv namespace create KV # already done → id in wrangler.toml
+```
+- KV namespace id: `9eb54efbf0644817bfd853449f8d61c3` (in `wrangler.toml`).
+- Secrets: `AI_KEY` set. `DEBUG_KEY` intentionally unset → `/debug` 404s in prod.
+- `players.json` is **gitignored** but exists on disk, so `wrangler deploy` bundles
+  it. A future git-connected CI deploy would need it committed.
+
+### 12.6 What's left
+- [ ] **Human browser pass of §8** on desktop + tablet (the real launch gate —
+      curl can't validate the SameSite=None cookie the way a browser does).
+- [ ] Optional: custom `api.squadwars.online` route (needs the domain on
+      Cloudflare; currently Vercel DNS). The `*.workers.dev` URL works for launch.
+- [ ] Tune the create-match limit (4/2h/IP) if NAT'd users block each other.
+
+---
+
+*Last updated 2026-06-23. Backend deployed to Cloudflare. If you change deploy
+config, env vars, or the backend host plan, update this file.*
