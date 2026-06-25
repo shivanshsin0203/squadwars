@@ -572,9 +572,23 @@ const tokens = `
 
   /* ── footer ── */
   .sw-footer { border-top: 1px solid var(--hairline); padding: 26px 0 40px; }
-  .sw-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .sw-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 20px 28px; flex-wrap: wrap; }
+  .sw-footer-brandcol { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
   .sw-footer-stamp { font-family: var(--font-display); font-size: 10px; font-weight: 700; letter-spacing: 0.26em; color: var(--dim); text-transform: uppercase; }
   .sw-footer-note { font-family: var(--font-mono); font-size: 10px; color: var(--dim); letter-spacing: 0.06em; }
+  /* maker credit + socials — quiet, grace-note register (dim, brightens on hover) */
+  .sw-footer-social { display: flex; align-items: center; gap: 14px; }
+  .sw-footer-by { font-family: var(--font-display); font-weight: 700; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+  .sw-footer-by b { color: var(--chalk-dim); font-weight: 700; }
+  .sw-footer-links { display: flex; align-items: center; gap: 8px; }
+  .sw-social-link {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: var(--r-md);
+    background: var(--surface-3); border: 1px solid var(--hairline-strong); color: var(--muted);
+    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  }
+  .sw-social-link:hover { color: var(--chalk); background: #232C3D; border-color: var(--chalk-soft); transform: translateY(-2px); }
+  .sw-social-link svg { width: 15px; height: 15px; display: block; }
 
   /* ── scroll cue ── */
   .sw-scrollcue { display: flex; align-items: center; gap: 8px; margin-top: 36px; font-family: var(--font-display); font-weight: 700; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
@@ -639,6 +653,24 @@ function Medallion({ size = 30 }: { size?: number }) {
       <circle cx="16" cy="16" r="11" stroke="#0B1018" strokeOpacity="0.22" strokeWidth="0.6" fill="none" />
       <path d="M7.5 10.5 L11.5 21.5 L16 14.5 L20.5 21.5 L24.5 10.5"
         stroke="#0B1018" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+// ─────────────────────────── social marks ───────────────────────────
+
+function XIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
+function GitHubIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
     </svg>
   );
 }
@@ -1352,11 +1384,38 @@ export default function LandingPage() {
         <footer className="sw-footer">
           <div className="sw-wrap">
             <div className="sw-footer-row">
-              <div className="sw-nav-brand">
-                <Medallion size={22} />
-                <span className="sw-footer-stamp">SQUADWARS</span>
+              <div className="sw-footer-brandcol">
+                <div className="sw-nav-brand">
+                  <Medallion size={22} />
+                  <span className="sw-footer-stamp">SQUADWARS</span>
+                </div>
+                <span className="sw-footer-note">a real-time 1v1 football auction · made for the love of the game</span>
               </div>
-              <span className="sw-footer-note">a real-time 1v1 football auction · made for the love of the game</span>
+              <div className="sw-footer-social">
+                <span className="sw-footer-by">Built by <b>Shivansh Singh</b></span>
+                <div className="sw-footer-links">
+                  <a
+                    className="sw-social-link"
+                    href="https://x.com/ShivanshSi0203"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Shivansh Singh on X"
+                    title="Shivansh Singh on X"
+                  >
+                    <XIcon />
+                  </a>
+                  <a
+                    className="sw-social-link"
+                    href="https://github.com/shivanshsin0203/squadwars"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="SquadWars on GitHub"
+                    title="SquadWars on GitHub"
+                  >
+                    <GitHubIcon />
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
         </footer>

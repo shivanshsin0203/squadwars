@@ -51,6 +51,7 @@ const DIFFICULTIES: DifficultyCard[] = [
     blurb: "warm, instinctive, plays the room. balanced bidder — honest and fair on the floor.",
     short: "warm, instinctive.",
     photo: "/easy.webp",
+    recommended: true,
   },
   {
     name: "medium",
@@ -67,13 +68,13 @@ const DIFFICULTIES: DifficultyCard[] = [
     blurb: "the shark. never lets an elite walk. ruthless with the wallet. always wins.",
     short: "the shark.",
     photo: "/hard.jpg",
-    recommended: true,
   },
 ];
 
-// Hard is the canonical experience — full lookahead + Henry persona + every server
-// cap-floor gets to flex. Easy/medium kept for lighter games.
-const DEFAULT_DIFFICULTY: DifficultyName = "hard";
+// Micah Richards (easy) is the recommended first match — a warm, fair opponent that
+// won't crush a newcomer on their first auction, so it's the default selection. Henry
+// (hard) is the full-fat experience for players who want to be punished; medium sits between.
+const DEFAULT_DIFFICULTY: DifficultyName = "easy";
 
 // ─────────────────────────── formation data (mirrors server FORMATIONS) ───────────────────────────
 
@@ -815,7 +816,7 @@ const tokens = `
     overflow: hidden;
   }
 
-  /* "RECOMMENDED" badge on the canonical-experience tile (hard). Floodlight
+  /* "RECOMMENDED" badge on the gentle-intro tile (easy · Micah). Floodlight
      reads well against both the dark default tile bg and the chalk selected bg. */
   .sw-diff-recommended {
     position: absolute;
