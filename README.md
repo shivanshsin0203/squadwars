@@ -157,12 +157,66 @@ Three AI managers, three temperaments at the rostrum — each a pundit persona d
                                   └──────────────────┘
 ```
 
-**How it fits together**
-- **One Durable Object per match.** Each `matchId` maps to a single `MatchDO` instance that owns the entire auction — bids, the player queue, the AI's plan. Because a DO is single-threaded per ID, there are no race conditions on concurrent bids, and state is persisted to DO storage (it survives Worker restarts and **self-deletes 24h** after the match starts).
-- **The clock is client-driven.** The browser runs the lot timer and tells the server when a lot ends, so the server needs no background timers for gameplay.
-- **The AI thinks asynchronously.** When a match is created, DeepSeek plans the AI's spending caps in the background via `waitUntil`, with a deterministic heuristic as a fallback — so the floor never blocks on the LLM.
-- **Session-bound URLs.** A match URL carries a bearer token bound to a server-issued session; requests authenticate with an `x-sw-session` header, so a pasted/leaked URL can't hijack someone else's match.
-- **SQLite-backed DOs run on the Cloudflare free tier** — no paid Workers plan required.
+### How it fits together
+
+#### The stateless edge
+
+The Worker is a pure front door — it holds **no match state**. It handles CORS (credentialed, **exact-origin echo**, no wildcards), runs a native rate-limit binding over `/api/match/*` that **fails open** (a limiter must never take down the game), applies a separate KV-backed limiter to match *creation*, mints a `nanoid` match id, and routes every other request to that match's Durable Object via `idFromName(matchId)`. Same id → same instance, every time.
+
+#### One Durable Object per match
+
+Each `matchId` resolves to a single `MatchDO` running in its **own isolate**, owning the entire auction — budgets, the player queue, the AI's bid plan, the final result. Two properties fall out for free:
+
+- **No cross-instance locking.** Matches are fully isolated; one match can never contend with another.
+- **Ordered mutations.** Inside the instance a promise-chain mutex serializes every state change, so two bids landing in the same millisecond resolve deterministically — no torn state.
+
+It hydrates from storage on cold start (`blockConcurrencyWhile`), persists after every mutation, and arms a storage **alarm that deletes the match 24 hours after creation** — no cron, no cleanup job, no orphaned rows. SQLite-backed Durable Objects mean all of this runs on the Cloudflare **free tier**.
+
+#### The clock lives in the browser
+
+The lot countdown runs **client-side**; when it hits zero the browser calls `/lot-end`. So the server runs **zero gameplay timers** — which is exactly what keeps it on the free tier. But a client-owned clock is a cheat surface, so the server never trusts it:
+
+- `/lot-end` is **time-validated** server-side (with ~1s of clock-skew slack) and returns **`425 Too Early`** if called before the lot can legally close.
+- Every response carries `serverNow` so the client can correct for drift.
+- **Anti-snipe:** a bid in the last 5 seconds pushes the deadline out by 7 — you can't steal a lot on the buzzer.
+
+#### Server authority & anti-cheat
+
+The server is the single source of truth, and the design assumes a hostile client:
+
+- **The AI's max bid for each lot is a server secret** — computed and stored inside the DO, **never sent to the client**, so you can't read it out of a network response.
+- **Fog of war by construction.** `toClientDTO()` strips the upcoming queue, the AI's signings (you see only a *count*), and every internal secret. Both squads are revealed **only** in the result phase.
+- **Stale actions are rejected** — a bid or AI-fire carrying an out-of-date `lotIndex`/`planId` gets a `409` or is ignored.
+- **Session-bound matches.** A match is tied to a ~192-bit session token issued at creation and authenticated via an `x-sw-session` header (a `*.workers.dev` cookie is third-party and blocked by many browsers). A *shared or leaked match URL carries no token* — it just `403`s instead of hijacking the creator's match.
+- **The reconciliation shot.** Because the AI's bid is triggered by a client timer, a cheater could simply *never fire it*. So at lot close, if the AI isn't already winning, the server takes **one guaranteed bid for it, up to its secret cap.** Suppressing the AI's network call gains you nothing — you still can't win a player below what the AI was willing to pay. This is the keystone that makes a client-driven clock safe.
+
+#### The AI has two brains
+
+Bid valuations come from a fast deterministic layer with an LLM on top — never the LLM *alone*:
+
+- **Heuristic floor (always on):** a cap of `floor(overall² / 80)`, clamped to 80% of the AI's remaining budget. Instant, free, and good enough to stand on its own.
+- **DeepSeek refinement:** a **synchronous seed** at match creation blocks lot 1 just long enough to open with a real plan; then after every lot an **async refresh** runs through `ctx.waitUntil` to price the next couple of lots — with a lookahead window scaled by difficulty (Micah sees 2 lots ahead, Carragher 5, Henry 10). The actual bid amount is **recomputed on the server at fire time** — the client timer only decides *when* to ask, never *how much*.
+- **Prompt caching:** the system prompt is static; persona, difficulty, lookahead and win-mandate all ride in the user-message JSON, keeping DeepSeek's prompt cache **~75–80% warm**. Per-match token cost is tracked end to end (`/debug`).
+
+#### Deterministic verdict, LLM as narrator
+
+The result is **math, not vibes.** Five categories — attack / midfield / defence plus chemistry, each with positional-fit penalties for fielding a player out of role — are scored deterministically for both sides. *Only then* is the LLM handed those final numbers to write the match report and the roast, so **it narrates the verdict; it never decides it.** Every LLM touchpoint (bid caps, the AI's XI pick, the prose) has a deterministic fallback — an outage degrades flavour, never breaks a match.
+
+#### Built to become multiplayer
+
+`AuctionMatch` is written to strict "DO discipline": one instance per id, all mutation through methods, a clean `serialize`/`restore` boundary, secrets kept out of the client DTO. A live 1v1-vs-human mode is therefore **a wrapper change, not a rewrite** — the room already *is* a Durable Object; it just needs a second human wired to the same instance.
+
+#### API surface
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/match` | Create a match, mint the id, seed the AI's opening plan |
+| `GET  …/state` | Fog-of-war-filtered snapshot (poll / reconnect) |
+| `POST …/start` | Open the first lot |
+| `POST …/bid` | Lodge a user bid (validated, anti-sniped) |
+| `POST …/ai-fire` | Client timer asks the server to resolve the AI's move |
+| `POST …/lot-end` | Close the lot (time-checked), resolve the winner, chain the next |
+| `POST …/result` | Submit your XI, compute the verdict |
 
 ---
 
